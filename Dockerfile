@@ -17,18 +17,18 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Set environment variables for build
-ENV NEXT_TELEMETRY_DISABLED 1
-ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
 
-# Build application
-RUN npm run build
+# Build application with verbose output
+RUN npm run build --verbose || (echo "Build failed. Contents of /app:" && ls -la /app && echo "Contents of node_modules:" && ls -la node_modules && exit 1)
 
 # Stage 3: Runner
 FROM node:18-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Copy necessary files from builder
 COPY --from=builder /app/public ./public
