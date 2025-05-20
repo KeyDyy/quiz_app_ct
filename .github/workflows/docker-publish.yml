@@ -4,6 +4,7 @@ on:
   push:
     branches: [ "main" ]
 
+
 jobs:
   build_and_publish:
     runs-on: ubuntu-latest
@@ -12,9 +13,9 @@ jobs:
       
       - name: Build and push the image
         run: |
-          docker login --username keydyy --password ${{ secrets.DH_PAT }}
-          docker build . --tag keydyy/quiz_app_ct:latest
-          docker push keydyy/quiz_app_ct:latest
+          docker login --username keydyy --password ${{ secrets.GH_PAT }} ghcr.io
+          docker build . --tag ghcr.io/keydyy/quiz_app_ct:latest
+          docker push ghcr.io/keydyy/quiz_app_ct:latest
 
   # build-and-deploy:
   #   runs-on: ubuntu-latest
@@ -23,4 +24,4 @@ jobs:
   #     - name: Deploy to Azure Container Apps
   #       run: |
   #         az login --service-principal -u ${{ secrets.AZURE_CLIENT_ID }} -p ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ secrets.AZURE_TENANT_ID }}
-  #         az containerapp update --name nextjs-quiz-app --resource-group quiz-app-resources --image ghcr.io/KeyDyy/nextjs-quiz-app:latest 
+  #         az containerapp update --name quiz_app_ct --resource-group quiz-app-resources --image ghcr.io/keydyy/quiz_app_ct:latest 
