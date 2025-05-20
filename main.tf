@@ -7,6 +7,11 @@ terraform {
   }
 }
 
+variable "github_repository" {
+  description = "GitHub repository name in format owner/repo"
+  type        = string
+}
+
 provider "azurerm" {
   features {}
   subscription_id = "235ed9ed-d344-429b-b677-f295a9d36fc2"
@@ -41,8 +46,7 @@ resource "azurerm_container_app" "nextjs_quiz_app" {
   template {
     container {
       name   = "nextjs"
-      # Replace this image with your built Next.js app image, e.g. from Azure Container Registry or Docker Hub
-      image  = "ghcr.io/your-org/nextjs-quiz-app:latest"
+      image  = "ghcr.io/KeyDyy/nextjs-quiz-app:latest"
       cpu    = 0.5
       memory = "1.0Gi"
       env {
