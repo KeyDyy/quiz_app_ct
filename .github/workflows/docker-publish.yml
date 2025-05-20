@@ -3,8 +3,6 @@
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
 
 jobs:
   build_and_publish:
@@ -14,9 +12,9 @@ jobs:
       
       - name: Build and push the image
         run: |
-          docker login --username KeyDyy --password ${{ secrets.GH_PAT }} ghcr.io
-          docker build . --tag ghcr.io/keydyy/nextjs-quiz-app:latest
-          docker push ghcr.io/keydyy/nextjs-quiz-app:latest
+          docker login --username keydyy --password ${{ secrets.DH_PAT }}
+          docker build . --tag keydyy/quiz_app_ct:latest
+          docker push keydyy/quiz_app_ct:latest
 
   # build-and-deploy:
   #   runs-on: ubuntu-latest
