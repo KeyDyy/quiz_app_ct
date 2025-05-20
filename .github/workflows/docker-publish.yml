@@ -15,8 +15,8 @@ jobs:
       - name: Build and push the image
         run: |
           docker login --username KeyDyy --password ${{ secrets.GH_PAT }} ghcr.io
-          docker build . --tag ghcr.io/KeyDyy/nextjs-quiz-app:latest
-          docker push ghcr.io/KeyDyy/nextjs-quiz-app:latest
+          docker build . --tag ghcr.io/keydyy/nextjs-quiz-app:latest
+          docker push ghcr.io/keydyy/nextjs-quiz-app:latest
 
   # build-and-deploy:
   #   runs-on: ubuntu-latest
