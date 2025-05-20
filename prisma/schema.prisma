@@ -1,0 +1,176 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["public"]
+}
+
+model GameInvitations {
+  sender_user_id   String             @db.Uuid
+  receiver_user_id String             @db.Uuid
+  status           game_invite_status @default(Pending)
+  quiz_id          Int
+  invitation_id    String             @id @db.Uuid
+  quiz             quizzes            @relation(fields: [quiz_id], references: [quiz_id], onDelete: NoAction, onUpdate: NoAction)
+  users_receiver   public_users       @relation("game_invitations_receiver_user_idTousers", fields: [receiver_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_sender     public_users       @relation("game_invitations_sender_user_idTousers", fields: [sender_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+model MultiplayerGame {
+  quiz_id        Int?
+  start_time     DateTime?     @db.Timestamp(6)
+  end_time       DateTime?     @db.Timestamp(6)
+  winner_user_id String?       @db.Uuid
+  invitation_id  String
+  game_id        String        @id @db.Uuid
+  questions      Json?         @db.Json
+  game_answers   GameAnswers[]
+  quiz           quizzes?      @relation(fields: [quiz_id], references: [quiz_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+model GameAnswers {
+  answer_id        Int             @id @default(autoincrement())
+  user_id          String          @db.Uuid
+  game_id          String          @db.Uuid
+  question_id      Int
+  is_correct       Boolean[]
+  multiplayer_game MultiplayerGame @relation(fields: [game_id], references: [game_id], onDelete: NoAction, onUpdate: NoAction)
+  question         Questions       @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+  user             public_users    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+model Questions {
+  question_id    Int           @id @default(autoincrement())
+  quiz_id        Int
+  question_text  String?
+  content        String?
+  correct_answer String
+  options        Json?
+  approved       Boolean       @default(false)
+  GameAnswers    GameAnswers[]
+  quizzes        quizzes       @relation(fields: [quiz_id], references: [quiz_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+model quizzes {
+  quiz_id           Int               @id @default(autoincrement())
+  title             String            @unique @db.VarChar(100)
+  description       String?           @unique
+  creator_user_id   String?           @db.Uuid
+  creation_date     DateTime?         @default(now()) @db.Timestamp(6)
+  logo              String?           @default("tuwstawswojamorde.png")
+  game_invitations  GameInvitations[]
+  multiplayer_games MultiplayerGame[]
+  questions         Questions[]
+  users             public_users?     @relation(fields: [creator_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+model Statistics {
+  stat_id               Int           @id @default(autoincrement())
+  user_id               String?       @db.Uuid
+  total_quizzes_taken   Int?          @default(0)
+  total_correct_answers Int?          @default(0)
+  users                 public_users? @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+model public_users {
+  id                   String            @id @db.Uuid
+  full_name            String?
+  avatar_url           String?           @default("https://t4.ftcdn.net/jpg/05/49/98/39/360_F_549983970_bRCkYfk0P6PP5fKbMhZMIb07mCJ6esXL.jpg")
+  username             String?
+  game_answers         GameAnswers[]
+  game_invite_receiver GameInvitations[] @relation("game_invitations_receiver_user_idTousers")
+  game_invite_sender   GameInvitations[] @relation("game_invitations_sender_user_idTousers")
+  statistics           Statistics[]
+  friend_send          friends[]         @relation("friends1")
+  friend_rec           friends[]         @relation("friends2")
+  quizzes              quizzes[]
+
+  @@map("users")
+  @@schema("public")
+}
+
+model friends {
+  id          Int                  @id @default(autoincrement())
+  user1       String               @db.Uuid
+  user2       String               @db.Uuid
+  created_at  DateTime             @default(now())
+  status      friend_invite_status @default(Pending)
+  user1_users public_users         @relation("friends1", fields: [user1], references: [id])
+  user2_users public_users         @relation("friends2", fields: [user2], references: [id])
+
+  @@schema("public")
+}
+
+enum GameType {
+  biologia
+  fizyka
+  geografia
+  chemia
+  historia
+  kosmos
+  ksiazki
+  samochody
+  programista
+
+  @@schema("public")
+}
+
+enum friend_invite_status {
+  Pending
+  Accepted
+  Declined
+
+  @@schema("public")
+}
+
+enum game_invite_status {
+  Pending
+  Accepted
+  Declined
+
+  @@schema("public")
+}
+
+enum pricing_plan_interval {
+  day
+  week
+  month
+  year
+
+  @@schema("public")
+}
+
+enum pricing_type {
+  one_time
+  recurring
+
+  @@schema("public")
+}
+
+enum subscription_status {
+  trialing
+  active
+  canceled
+  incomplete
+  incomplete_expired
+  past_due
+  unpaid
+
+  @@schema("public")
+}
