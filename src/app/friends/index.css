@@ -1,0 +1,32 @@
+.right-sidebar {
+    position: fixed;
+    top: 0;
+    right: -305px;
+    /* Initially hidden, can adjust width as needed */
+    width: 300px;
+    /* Adjust the width to your preference */
+    height: 100%;
+    background-color: #fff;
+    /* Background color for the sidebar */
+    box-shadow: -2px 0 5px rgba(0, 0, 0, 0.2);
+    /* Add a shadow to create separation */
+    overflow-y: auto;
+    /* Enable vertical scrolling if content overflows */
+    padding: 20px;
+    z-index: 10;
+    /* Ensure it's above other content */
+    transition: right 0.3s;
+    /* Add a transition for smooth sliding */
+}
+
+
+/* Show the sidebar */
+.right-sidebar.show {
+    right: 0;
+}
+
+/* Hide the sidebar */
+.right-sidebar.hide {
+    right: -305px;
+    /* Adjust the width to match the initial width */
+}
