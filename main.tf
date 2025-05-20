@@ -46,7 +46,7 @@ resource "azurerm_container_app" "nextjs_quiz_app" {
   template {
     container {
       name   = "nextjs"
-      image  = "ghcr.io/KeyDyy/nextjs-quiz-app:latest"
+      image  = "ghcr.io/keydyy/nextjs-quiz-app:latest"
       cpu    = 0.5
       memory = "1.0Gi"
       env {
