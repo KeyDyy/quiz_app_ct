@@ -132,25 +132,32 @@ resource "azurerm_container_app" "quiz_app" {
       cpu    = each.value.cpu
       memory = each.value.memory
 
+      # Force environment variables to be set at runtime
       env {
         name  = "NODE_ENV"
         value = "production"
       }
 
+      # Override Supabase URL
       env {
         name  = "NEXT_PUBLIC_SUPABASE_URL"
-        value = "https://thceyhfyacvdfghkyhwp.supabase.co"  # each.value.supabase_url
+        value = each.value.supabase_url
       }
 
+      # Override Supabase key using secret
       env {
         name         = "NEXT_PUBLIC_SUPABASE_ANON_KEY"
         secret_name  = "supabase-anon-key-${each.key}"
       }
 
+      # Override tenant ID
       env {
         name  = "TENANT_ID"
         value = each.key
       }
+
+      # Add runtime configuration to ensure environment variables are used
+      command = ["/bin/sh", "-c", "export NEXT_PUBLIC_SUPABASE_URL=${each.value.supabase_url} && export NEXT_PUBLIC_SUPABASE_ANON_KEY=$(cat /run/secrets/supabase-anon-key-${each.key}) && export TENANT_ID=${each.key} && node server.js"]
     }
   }
 
