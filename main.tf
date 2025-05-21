@@ -139,7 +139,7 @@ resource "azurerm_container_app" "quiz_app" {
 
       env {
         name  = "NEXT_PUBLIC_SUPABASE_URL"
-        value = each.value.supabase_url
+        value = "https://thceyhfyacvdfghkyhwp.supabase.co"  # each.value.supabase_url
       }
 
       env {
