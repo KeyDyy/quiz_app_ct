@@ -14,9 +14,7 @@ jobs:
       - name: Build and push the image
         run: |
           docker login --username keydyy --password ${{ secrets.GH_PAT }} ghcr.io
-          docker build . --tag ghcr.io/keydyy/quiz_app_ct:latest \
-            --build-arg NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }} \
-            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          docker build . --tag ghcr.io/keydyy/quiz_app_ct:latest
           docker push ghcr.io/keydyy/quiz_app_ct:latest
   # build-and-deploy:
   #   runs-on: ubuntu-latest
