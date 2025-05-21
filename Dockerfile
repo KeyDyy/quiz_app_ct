@@ -30,8 +30,8 @@ ENV TENANT_ID=$TENANT_ID
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build application
-RUN npm run build
+# Build application with empty Supabase config
+RUN NEXT_PUBLIC_SUPABASE_URL="" NEXT_PUBLIC_SUPABASE_ANON_KEY="" npm run build
 
 # Stage 3: Runner
 FROM node:20-alpine AS runner
