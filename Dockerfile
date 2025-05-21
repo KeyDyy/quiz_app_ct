@@ -15,9 +15,6 @@ WORKDIR /app
 # Set environment variables for build
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
-# Set placeholder values for build-time variables
-ENV NEXT_PUBLIC_SUPABASE_URL="https://placeholder.supabase.co"
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY="placeholder-key"
 
 # Copy dependencies from deps stage
 COPY --from=deps /app/node_modules ./node_modules
