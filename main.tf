@@ -124,6 +124,8 @@ resource "azurerm_container_app" "quiz_app" {
   }
 
   template {
+    revision_suffix = "v1"  # Force new revision when env vars change
+    
     container {
       name   = "nextjs"
       image  = "ghcr.io/${var.github_repository}:latest"
@@ -161,6 +163,12 @@ resource "azurerm_container_app" "quiz_app" {
       latest_revision = true
       percentage      = 100
     }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image
+    ]
   }
 }
 
