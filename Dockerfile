@@ -2,7 +2,7 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Copy package files
+# Copy only package files for faster caching
 COPY package.json package-lock.json ./
 
 # Install dependencies
@@ -16,37 +16,40 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# Define build arguments with default values
-ARG NEXT_PUBLIC_SUPABASE_URL="https://placeholder.supabase.co"
-ARG NEXT_PUBLIC_SUPABASE_ANON_KEY="placeholder-key"
-ARG TENANT_ID="placeholder"
+# Use placeholder build-time values, do not rely on real secrets
+ARG NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-key
+ARG TENANT_ID=placeholder
 
-# Set environment variables from build arguments
-ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
-ENV TENANT_ID=$TENANT_ID
+# These are passed into the app build (e.g. Next.js static embedding)
+ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+ENV TENANT_ID=${TENANT_ID}
 
-# Copy dependencies from deps stage
+# Copy deps from previous stage
 COPY --from=deps /app/node_modules ./node_modules
+
+# Copy rest of the source
 COPY . .
 
-# Build application with empty Supabase config
-RUN NEXT_PUBLIC_SUPABASE_URL="" NEXT_PUBLIC_SUPABASE_ANON_KEY="" npm run build
+# Build the app – if using Next.js, this will embed the NEXT_PUBLIC_ vars into static assets
+RUN npm run build
 
-# Stage 3: Runner
+# Stage 3: Runtime container
 FROM node:20-alpine AS runner
 WORKDIR /app
 
+# Disable telemetry
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Copy necessary files from builder
+# Copy necessary runtime files
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
-# Expose port
+# Expose port for Azure Container App
 EXPOSE 3000
 
-# Start the application
-CMD ["node", "server.js"] 
+# Start the server – ensure your app uses runtime envs like process.env.DATABASE_URL etc.
+CMD ["node", "server.js"]
