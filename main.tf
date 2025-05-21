@@ -41,51 +41,70 @@ variable "container_apps" {
 }
 
 variable "create_new_environment" {
-  description = "Whether to create new resource group and environment or use existing ones"
+  description = "Whether to create a new resource group and container app environment"
   type        = bool
   default     = false
 }
 
-# Resource Group - create new or use existing
-resource "azurerm_resource_group" "quiz_app" {
-  count    = var.create_new_environment ? 1 : 0
-  name     = "quizapp"
-  location = "North Europe"
+variable "resource_group_name" {
+  description = "Name of the resource group"
+  type        = string
+  default     = "quizapp"
 }
+
+variable "location" {
+  description = "Azure region"
+  type        = string
+  default     = "North Europe"
+}
+
+### === Resource Group ===
 
 data "azurerm_resource_group" "quiz_app" {
-  count = var.create_new_environment ? 0 : 1
-  name  = "quizapp"
+  name = var.resource_group_name
 }
+
+resource "azurerm_resource_group" "quiz_app" {
+  name     = var.resource_group_name
+  location = var.location
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+### === Container App Environment ===
+
+data "azurerm_container_app_environment" "quiz_env" {
+  name                = var.resource_group_name
+  resource_group_name = var.resource_group_name
+}
+
+resource "azurerm_container_app_environment" "quiz_env" {
+  name                = var.resource_group_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+### === Local selectors ===
 
 locals {
-  resource_group_name = var.create_new_environment ? azurerm_resource_group.quiz_app[0].name : data.azurerm_resource_group.quiz_app[0].name
-  resource_group_location = var.create_new_environment ? azurerm_resource_group.quiz_app[0].location : data.azurerm_resource_group.quiz_app[0].location
+  rg_name     = var.create_new_environment ? azurerm_resource_group.quiz_app.name : data.azurerm_resource_group.quiz_app.name
+  rg_location = var.create_new_environment ? azurerm_resource_group.quiz_app.location : data.azurerm_resource_group.quiz_app.location
+  env_id      = var.create_new_environment ? azurerm_container_app_environment.quiz_env.id : data.azurerm_container_app_environment.quiz_env.id
 }
 
-# Container App Environment - create new or use existing
-resource "azurerm_container_app_environment" "quiz_app_env" {
-  count                       = var.create_new_environment ? 1 : 0
-  name                       = "quizapp"
-  location                   = local.resource_group_location
-  resource_group_name        = local.resource_group_name
-}
-
-data "azurerm_container_app_environment" "quiz_app_env" {
-  count               = var.create_new_environment ? 0 : 1
-  name                = "quizapp"
-  resource_group_name = local.resource_group_name
-}
-
-locals {
-  environment_id = var.create_new_environment ? azurerm_container_app_environment.quiz_app_env[0].id : data.azurerm_container_app_environment.quiz_app_env[0].id
-}
+### === Container App Deployment ===
 
 resource "azurerm_container_app" "quiz_app" {
   for_each                      = var.container_apps
   name                          = each.value.name
-  container_app_environment_id  = local.environment_id
-  resource_group_name           = local.resource_group_name
+  container_app_environment_id  = local.env_id
+  resource_group_name           = local.rg_name
   revision_mode                 = "Single"
 
   registry {
@@ -97,6 +116,11 @@ resource "azurerm_container_app" "quiz_app" {
   secret {
     name  = "ghcr-pat"
     value = var.ghcr_pat
+  }
+
+  secret {
+    name  = "supabase-anon-key-${each.key}"
+    value = each.value.supabase_anon_key
   }
 
   template {
@@ -114,21 +138,17 @@ resource "azurerm_container_app" "quiz_app" {
       env {
         name  = "NEXT_PUBLIC_SUPABASE_URL"
         value = each.value.supabase_url
-        secret = false
       }
 
       env {
-        name  = "NEXT_PUBLIC_SUPABASE_ANON_KEY"
-        value = each.value.supabase_anon_key
-        secret = true
+        name         = "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+        secret_name  = "supabase-anon-key-${each.key}"
       }
 
       env {
         name  = "TENANT_ID"
         value = each.key
       }
-
-      # możesz dodać więcej env np. DB_URL, SENTRY_DSN itp.
     }
   }
 
@@ -151,3 +171,5 @@ output "container_app_urls" {
     k => app.ingress[0].fqdn
   }
 }
+
+# -var="create_new_environment=true"
