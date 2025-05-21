@@ -11,6 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Generate .env file for build
+        run: |
+          echo "NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co" >> .env
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-key" >> .env
+
       - name: Build and push the image
         run: |
           docker login --username keydyy --password ${{ secrets.GH_PAT }} ghcr.io
