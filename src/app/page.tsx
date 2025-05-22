@@ -23,6 +23,7 @@ export default function Home() {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        console.log('Current TENANT_ID:', process.env.TENANT_ID);
         const quizData = await getQuizzesData();
         setData(quizData);
       } catch (error) {
