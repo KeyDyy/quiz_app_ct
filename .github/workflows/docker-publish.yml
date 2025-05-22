@@ -15,6 +15,9 @@ jobs:
         run: |
           docker login --username keydyy --password ${{ secrets.GH_PAT }} ghcr.io
           docker build . \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL="https://placeholder.supabase.co" \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="placeholder-key" \
+            --build-arg TENANT_ID="placeholder" \
             --tag ghcr.io/keydyy/quiz_app_ct:latest
           docker push ghcr.io/keydyy/quiz_app_ct:latest
   # build-and-deploy:
