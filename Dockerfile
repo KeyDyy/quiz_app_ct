@@ -1,8 +1,10 @@
 # Stage 1: Dependencies
 FROM node:20-alpine AS deps
 WORKDIR /app
+
 # Copy only package files for faster caching
 COPY package.json package-lock.json ./
+
 # Install dependencies
 RUN npm ci
 
@@ -14,8 +16,15 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# KLUCZOWE: NIE ustawiaj NEXT_PUBLIC_* zmiennych podczas budowania
-# Zamiast tego, skonfiguruj Next.js żeby nie wbudowywał ich w statyczne pliki
+# Use placeholder build-time values, do not rely on real secrets
+ARG NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-key
+ARG TENANT_ID=placeholder
+
+# These are passed into the app build (e.g. Next.js static embedding)
+ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+ENV TENANT_ID=${TENANT_ID}
 
 # Copy deps from previous stage
 COPY --from=deps /app/node_modules ./node_modules
@@ -23,42 +32,24 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy rest of the source
 COPY . .
 
-# Zbuduj aplikację BEZ ustawiania NEXT_PUBLIC_* zmiennych
-# To pozwoli na ich nadpisanie w runtime
+# Build the app – if using Next.js, this will embed the NEXT_PUBLIC_ vars into static assets
 RUN npm run build
 
 # Stage 3: Runtime container
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Set production environment
+# Disable telemetry
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Create a non-root user for security
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
 # Copy necessary runtime files
 COPY --from=builder /app/public ./public
-
-# Set the correct permission for prerender cache
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-# Copy built application
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
-# Switch to non-root user
-USER nextjs
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 
 # Expose port for Azure Container App
 EXPOSE 3000
 
-# Ustaw port dla Next.js
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-# Start the server
+# Start the server – ensure your app uses runtime envs like process.env.DATABASE_URL etc.
 CMD ["node", "server.js"]

@@ -61,12 +61,10 @@ variable "location" {
 ### === Resource Group ===
 
 data "azurerm_resource_group" "quiz_app" {
-  count = var.create_new_environment ? 0 : 1
-  name  = var.resource_group_name
+  name = var.resource_group_name
 }
 
 resource "azurerm_resource_group" "quiz_app" {
-  count    = var.create_new_environment ? 1 : 0
   name     = var.resource_group_name
   location = var.location
 
@@ -78,16 +76,14 @@ resource "azurerm_resource_group" "quiz_app" {
 ### === Container App Environment ===
 
 data "azurerm_container_app_environment" "quiz_env" {
-  count               = var.create_new_environment ? 0 : 1
   name                = var.resource_group_name
   resource_group_name = var.resource_group_name
 }
 
 resource "azurerm_container_app_environment" "quiz_env" {
-  count               = var.create_new_environment ? 1 : 0
   name                = var.resource_group_name
   location            = var.location
-  resource_group_name = local.rg_name
+  resource_group_name = var.resource_group_name
 
   lifecycle {
     create_before_destroy = true
@@ -97,9 +93,9 @@ resource "azurerm_container_app_environment" "quiz_env" {
 ### === Local selectors ===
 
 locals {
-  rg_name     = var.create_new_environment ? azurerm_resource_group.quiz_app[0].name : data.azurerm_resource_group.quiz_app[0].name
-  rg_location = var.create_new_environment ? azurerm_resource_group.quiz_app[0].location : data.azurerm_resource_group.quiz_app[0].location
-  env_id      = var.create_new_environment ? azurerm_container_app_environment.quiz_env[0].id : data.azurerm_container_app_environment.quiz_env[0].id
+  rg_name     = var.create_new_environment ? azurerm_resource_group.quiz_app.name : data.azurerm_resource_group.quiz_app.name
+  rg_location = var.create_new_environment ? azurerm_resource_group.quiz_app.location : data.azurerm_resource_group.quiz_app.location
+  env_id      = var.create_new_environment ? azurerm_container_app_environment.quiz_env.id : data.azurerm_container_app_environment.quiz_env.id
 }
 
 ### === Container App Deployment ===
@@ -128,8 +124,7 @@ resource "azurerm_container_app" "quiz_app" {
   }
 
   template {
-    # Używaj znacznika czasu lub hash do wymuszenia nowej rewizji
-    revision_suffix = substr(sha256("${each.value.supabase_url}-${each.value.supabase_anon_key}-${each.key}"), 0, 8)
+    revision_suffix = "v1"  # Force new revision when env vars change
     
     container {
       name   = "nextjs"
@@ -137,33 +132,32 @@ resource "azurerm_container_app" "quiz_app" {
       cpu    = each.value.cpu
       memory = each.value.memory
 
-      # KLUCZOWE: Zmienne środowiskowe ustawione tutaj będą nadpisywać te z obrazu Docker
+      # Force environment variables to be set at runtime
       env {
         name  = "NODE_ENV"
         value = "production"
       }
 
-      # Te zmienne będą nadpisywać wartości z czasu budowania
+      # Override Supabase URL
       env {
         name  = "NEXT_PUBLIC_SUPABASE_URL"
         value = each.value.supabase_url
       }
 
+      # Override Supabase key using secret
       env {
         name         = "NEXT_PUBLIC_SUPABASE_ANON_KEY"
         secret_name  = "supabase-anon-key-${each.key}"
       }
 
+      # Override tenant ID
       env {
         name  = "TENANT_ID"
         value = each.key
       }
 
-      # Dodatkowe zmienne które mogą być potrzebne do nadpisania
-      env {
-        name  = "RUNTIME_TENANT_CONFIG"
-        value = "true"
-      }
+      # Add runtime configuration to ensure environment variables are used
+      command = ["/bin/sh", "-c", "export NEXT_PUBLIC_SUPABASE_URL=${each.value.supabase_url} && export NEXT_PUBLIC_SUPABASE_ANON_KEY=$(cat /run/secrets/supabase-anon-key-${each.key}) && export TENANT_ID=${each.key} && node server.js"]
     }
   }
 
@@ -179,9 +173,9 @@ resource "azurerm_container_app" "quiz_app" {
   }
 
   lifecycle {
-    # Usuń ignore_changes dla image - pozwoli to na aktualizacje
-    # Jeśli chcesz zachować ignorowanie zmian obrazu, zostaw poniższą linię
-    # ignore_changes = [template[0].container[0].image]
+    ignore_changes = [
+      template[0].container[0].image
+    ]
   }
 }
 
@@ -192,3 +186,5 @@ output "container_app_urls" {
     k => app.ingress[0].fqdn
   }
 }
+
+# -var="create_new_environment=true"
