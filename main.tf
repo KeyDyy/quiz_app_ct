@@ -99,7 +99,7 @@ locals {
 }
 
 ### === Container App Deployment ===
-
+#
 resource "azurerm_container_app" "quiz_app" {
   for_each                      = var.container_apps
   name                          = each.value.name
