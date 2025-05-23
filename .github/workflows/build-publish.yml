@@ -160,30 +160,29 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Terraform Init
-        working-directory: ./terraform
         run: terraform init
 
       - name: Terraform Plan
-        working-directory: ./terraform
         run: |
           terraform plan \
-            -var="tenant_id=${{ env.TENANT_ID }}" \
-            -var="image_name=${{ env.REGISTRY }}/${{ env.GITHUB_REPOSITORY_OWNER }}/${{ env.IMAGE_NAME }}-${{ env.TENANT_ID }}:latest" \
-            -var="container_name=quiz-app-${{ env.TENANT_ID }}" \
-            -var="supabase_url=${{ env.SUPABASE_URL }}" \
-            -var="supabase_anon_key=${{ env.SUPABASE_KEY }}" \
-            -var="cpu_limit=${{ env.CPU_LIMIT }}" \
-            -var="memory_limit=${{ env.MEMORY_LIMIT }}" \
-            -var="min_replicas=${{ env.MIN_REPLICAS }}" \
-            -var="max_replicas=${{ env.MAX_REPLICAS }}" \
+            -var="github_repository=keydyy/quiz_app_ct" \
+            -var="ghcr_username=keydyy" \
+            -var="ghcr_pat=${{ secrets.GH_PAT }}" \
+            -var="container_apps={ \
+              \"${{ env.TENANT_ID }}\" = { \
+                name = \"quiz-app-${{ env.TENANT_ID }}\", \
+                supabase_url = \"${{ env.SUPABASE_URL }}\", \
+                supabase_anon_key = \"${{ env.SUPABASE_KEY }}\", \
+                cpu = ${{ env.CPU_LIMIT }}, \
+                memory = \"${{ env.MEMORY_LIMIT }}\" \
+              } \
+            }" \
             -out=tfplan
 
       - name: Terraform Apply
-        working-directory: ./terraform
         run: terraform apply -auto-approve tfplan
 
       - name: Get Container App URL
-        working-directory: ./terraform
         id: get_url
         run: |
           FQDN=$(terraform output -raw container_app_fqdn 2>/dev/null || echo "")
