@@ -45,6 +45,8 @@ env:
 
 jobs:
   build_and_deploy:
+    # Skip push events if they were triggered by the function
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.actor != 'AzureFunction')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -53,6 +55,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Debug event information
+        run: |
+          echo "Event name: ${{ github.event_name }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Ref name: ${{ github.ref_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Head ref: ${{ github.head_ref }}"
+          echo "Base ref: ${{ github.base_ref }}"
 
       - name: Extract tenant ID and load environment
         id: extract_tenant
