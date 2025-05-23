@@ -3,6 +3,10 @@ name: Build & Deploy Tenant
 on:
   push:
     branches: [ "main", "deploy/**" ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'terraform/**'
   workflow_dispatch:
     inputs:
       tenant_id:
@@ -45,8 +49,16 @@ env:
 
 jobs:
   build_and_deploy:
-    # Skip push events if they were triggered by the function
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.actor != 'AzureFunction')
+    # Skip if:
+    # 1. It's a push event from AzureFunction
+    # 2. It's a push event with commit message containing "Add tenant configuration"
+    # 3. It's a push event that only modified terraform files
+    if: |
+      (github.event_name == 'workflow_dispatch') || 
+      (github.event_name == 'push' && 
+       github.actor != 'AzureFunction' && 
+       !contains(github.event.head_commit.message, 'Add tenant configuration') &&
+       !contains(github.event.head_commit.modified, 'terraform/'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -179,6 +191,7 @@ jobs:
             -var="github_repository=keydyy/quiz_app_ct" \
             -var="ghcr_username=keydyy" \
             -var="ghcr_pat=${{ secrets.GH_PAT }}" \
+            -var="create_new_environment=false" \
             -var="container_apps={ \
               \"${{ env.TENANT_ID }}\" = { \
                 name = \"quiz-app-${{ env.TENANT_ID }}\", \
