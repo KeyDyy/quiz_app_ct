@@ -16,15 +16,15 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# Use placeholder build-time values, do not rely on real secrets
-ARG NEXT_PUBLIC_SUPABASE_URL="https://placeholder.supabase.co"
-ARG NEXT_PUBLIC_SUPABASE_ANON_KEY="placeholder-key"
-ARG TENANT_ID="placeholder"
+# Accept build arguments for Supabase configuration
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_TENANT_ID
 
 # These are passed into the app build (e.g. Next.js static embedding)
 ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
-ENV TENANT_ID=${TENANT_ID}
+ENV NEXT_PUBLIC_TENANT_ID=${NEXT_PUBLIC_TENANT_ID}
 
 # Copy deps from previous stage
 COPY --from=deps /app/node_modules ./node_modules
@@ -32,7 +32,7 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy rest of the source
 COPY . .
 
-# Build the app – if using Next.js, this will embed the NEXT_PUBLIC_ vars into static assets
+# Build the app
 RUN npm run build
 
 # Stage 3: Runtime container
@@ -51,5 +51,5 @@ COPY --from=builder /app/.next/static ./.next/static
 # Expose port for Azure Container App
 EXPOSE 3000
 
-# Start the server – ensure your app uses runtime envs like process.env.DATABASE_URL etc.
+# Start the server
 CMD ["node", "server.js"]
