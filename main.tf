@@ -58,6 +58,11 @@ variable "location" {
   default     = "North Europe"
 }
 
+variable "image_name" {
+  description = "The name of the image to be used for container apps"
+  type        = string
+}
+
 ### === Resource Group ===
 
 data "azurerm_resource_group" "quiz_app" {
@@ -132,7 +137,7 @@ resource "azurerm_container_app" "quiz_app" {
     
     container {
       name   = "nextjs"
-      image  = "ghcr.io/${var.github_repository}:latest"
+      image  = "ghcr.io/${var.ghcr_username}/${var.image_name}-${each.key}:latest"
       cpu    = each.value.cpu
       memory = each.value.memory
 

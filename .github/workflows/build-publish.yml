@@ -192,6 +192,7 @@ jobs:
             -var="ghcr_username=keydyy" \
             -var="ghcr_pat=${{ secrets.GH_PAT }}" \
             -var="create_new_environment=false" \
+            -var="image_name=quiz_app_ct" \
             -var="container_apps={ \
               \"${{ env.TENANT_ID }}\" = { \
                 name = \"quiz-app-${{ env.TENANT_ID }}\", \
