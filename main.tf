@@ -132,13 +132,6 @@ resource "azurerm_container_app" "quiz_app" {
       cpu    = each.value.cpu
       memory = each.value.memory
 
-      # Build arguments for Next.js build
-      build_args = {
-        NEXT_PUBLIC_SUPABASE_URL      = each.value.supabase_url
-        NEXT_PUBLIC_SUPABASE_ANON_KEY = each.value.supabase_anon_key
-        NEXT_PUBLIC_TENANT_ID         = each.key
-      }
-
       # Runtime environment variables
       env {
         name  = "NODE_ENV"
