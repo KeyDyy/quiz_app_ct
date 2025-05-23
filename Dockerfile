@@ -17,9 +17,9 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
 # Use placeholder build-time values, do not rely on real secrets
-ARG NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
-ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-key
-ARG TENANT_ID=placeholder
+ARG NEXT_PUBLIC_SUPABASE_URL="https://placeholder.supabase.co"
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY="placeholder-key"
+ARG TENANT_ID="placeholder"
 
 # These are passed into the app build (e.g. Next.js static embedding)
 ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
