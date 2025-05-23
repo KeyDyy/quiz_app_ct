@@ -52,3 +52,4 @@ override.tf.json
 *_override.tf.json
 
 create-tenant-api/azure_credentials.json
+*.azure_credentials.json
