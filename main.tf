@@ -61,10 +61,12 @@ variable "location" {
 ### === Resource Group ===
 
 data "azurerm_resource_group" "quiz_app" {
-  name = var.resource_group_name
+  count = var.create_new_environment ? 0 : 1
+  name  = var.resource_group_name
 }
 
 resource "azurerm_resource_group" "quiz_app" {
+  count    = var.create_new_environment ? 1 : 0
   name     = var.resource_group_name
   location = var.location
 
@@ -76,11 +78,13 @@ resource "azurerm_resource_group" "quiz_app" {
 ### === Container App Environment ===
 
 data "azurerm_container_app_environment" "quiz_env" {
+  count               = var.create_new_environment ? 0 : 1
   name                = var.resource_group_name
   resource_group_name = var.resource_group_name
 }
 
 resource "azurerm_container_app_environment" "quiz_env" {
+  count               = var.create_new_environment ? 1 : 0
   name                = var.resource_group_name
   location            = var.location
   resource_group_name = var.resource_group_name
@@ -93,9 +97,9 @@ resource "azurerm_container_app_environment" "quiz_env" {
 ### === Local selectors ===
 
 locals {
-  rg_name     = var.create_new_environment ? azurerm_resource_group.quiz_app.name : data.azurerm_resource_group.quiz_app.name
-  rg_location = var.create_new_environment ? azurerm_resource_group.quiz_app.location : data.azurerm_resource_group.quiz_app.location
-  env_id      = var.create_new_environment ? azurerm_container_app_environment.quiz_env.id : data.azurerm_container_app_environment.quiz_env.id
+  rg_name     = var.create_new_environment ? azurerm_resource_group.quiz_app[0].name : data.azurerm_resource_group.quiz_app[0].name
+  rg_location = var.create_new_environment ? azurerm_resource_group.quiz_app[0].location : data.azurerm_resource_group.quiz_app[0].location
+  env_id      = var.create_new_environment ? azurerm_container_app_environment.quiz_env[0].id : data.azurerm_container_app_environment.quiz_env[0].id
 }
 
 ### === Container App Deployment ===
