@@ -394,15 +394,15 @@ def trigger_github_workflow(gh_pat, tenant_id, branch_name, workflow_inputs):
         raise Exception(f"GitHub API request failed: {str(e)}")
 
 
-def get_container_url(gh_pat: str, workflow_run_id: str) -> dict:
-    """Get the container app URL and workflow status from the GitHub Actions workflow run"""
+def get_container_url(gh_pat: str, workflow_run_id: str) -> str:
+    """Get the container app URL from the GitHub Actions workflow run"""
     try:
         headers = {
             "Authorization": f"token {gh_pat}",
             "Accept": "application/vnd.github.v3+json",
         }
 
-        # Get the workflow run status
+        # Get the workflow run summary
         run_url = (
             f"{GITHUB_API_URL}/repos/keydyy/quiz_app_ct/actions/runs/{workflow_run_id}"
         )
@@ -411,29 +411,6 @@ def get_container_url(gh_pat: str, workflow_run_id: str) -> dict:
             raise Exception(
                 f"Failed to get workflow run: {response.status_code} - {response.text}"
             )
-
-        run_data = response.json()
-        status = run_data.get("status", "unknown")
-        conclusion = run_data.get("conclusion", "unknown")
-
-        # If workflow is still running or not completed, return status
-        if status != "completed":
-            return {
-                "status": "in_progress",
-                "workflow_status": status,
-                "container_url": None,
-                "message": "Deployment is still in progress",
-            }
-
-        # If workflow completed but failed
-        if conclusion != "success":
-            return {
-                "status": "failed",
-                "workflow_status": status,
-                "workflow_conclusion": conclusion,
-                "container_url": None,
-                "message": f"Deployment failed with conclusion: {conclusion}",
-            }
 
         # Get the jobs for this run
         jobs_url = f"{run_url}/jobs"
@@ -445,24 +422,14 @@ def get_container_url(gh_pat: str, workflow_run_id: str) -> dict:
 
         jobs = response.json()["jobs"]
         if not jobs:
-            return {
-                "status": "completed",
-                "workflow_status": status,
-                "container_url": None,
-                "message": "No jobs found in workflow run",
-            }
+            return "URL not available yet"
 
         # Get the build_and_deploy job
         build_job = next(
             (job for job in jobs if job["name"] == "build_and_deploy"), None
         )
         if not build_job:
-            return {
-                "status": "completed",
-                "workflow_status": status,
-                "container_url": None,
-                "message": "Build and deploy job not found",
-            }
+            return "URL not available yet"
 
         # Get the job steps
         steps_url = f"{GITHUB_API_URL}/repos/keydyy/quiz_app_ct/actions/jobs/{build_job['id']}/steps"
@@ -478,12 +445,7 @@ def get_container_url(gh_pat: str, workflow_run_id: str) -> dict:
             (step for step in steps if step["name"] == "Get Container App URL"), None
         )
         if not url_step:
-            return {
-                "status": "completed",
-                "workflow_status": status,
-                "container_url": None,
-                "message": "Container URL step not found",
-            }
+            return "URL not available yet"
 
         # Get the step logs
         logs_url = f"{GITHUB_API_URL}/repos/keydyy/quiz_app_ct/actions/jobs/{build_job['id']}/steps/{url_step['number']}/logs"
@@ -495,34 +457,17 @@ def get_container_url(gh_pat: str, workflow_run_id: str) -> dict:
 
         # Parse the logs to find the container URL
         logs = response.text
-        container_url = None
         for line in logs.split("\n"):
             if "container_url=" in line:
                 url = line.split("=")[1].strip()
                 if url != "Not available yet":
-                    container_url = url
-                    break
+                    return url
 
-        return {
-            "status": "completed",
-            "workflow_status": status,
-            "workflow_conclusion": conclusion,
-            "container_url": container_url,
-            "message": (
-                "Deployment completed successfully"
-                if container_url
-                else "Container URL not available yet"
-            ),
-        }
+        return "URL not available yet"
 
     except Exception as e:
         logger.error(f"Error getting container URL: {str(e)}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "container_url": None,
-            "message": f"Error retrieving container URL: {str(e)}",
-        }
+        return "Error retrieving URL"
 
 
 @app.function_name(name="CreateTenant")
@@ -556,7 +501,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         tenant_id = data.get("tenant_id")
         supabase_url = data.get("supabase_url")
         supabase_key = data.get("supabase_anon_key")
-        database_url = data.get("database_url")
+        database_url = data.get(
+            "database_url"
+        )  # New parameter for direct DB connection
         gh_pat = data.get("gh_pat")
 
         # Optional parameters for container configuration
@@ -589,175 +536,143 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json",
             )
 
-        # Create temporary directory
+        # Create temporary directory (cross-platform)
         local_path = tempfile.mkdtemp(prefix=f"tenant-{tenant_id}-")
         logger.info(f"Using temporary directory: {local_path}")
 
+        # Set git configuration
+        os.environ["GIT_AUTHOR_NAME"] = "AzureFunction"
+        os.environ["GIT_AUTHOR_EMAIL"] = "azure@function.local"
+        os.environ["GIT_COMMITTER_NAME"] = "AzureFunction"
+        os.environ["GIT_COMMITTER_EMAIL"] = "azure@function.local"
+
+        # 1. Clone repository
+        logger.info("Cloning repository...")
+        authenticated_url = REPO_URL.replace("https://", f"https://{gh_pat}@")
+        run_command(f"git clone --branch main {authenticated_url} {local_path}")
+
+        # 2. Initialize database with migrations
         try:
-            # Set git configuration
-            os.environ["GIT_AUTHOR_NAME"] = "AzureFunction"
-            os.environ["GIT_AUTHOR_EMAIL"] = "azure@function.local"
-            os.environ["GIT_COMMITTER_NAME"] = "AzureFunction"
-            os.environ["GIT_COMMITTER_EMAIL"] = "azure@function.local"
-
-            # 1. Clone repository
-            logger.info("Cloning repository...")
-            authenticated_url = REPO_URL.replace("https://", f"https://{gh_pat}@")
-            run_command(f"git clone --branch main {authenticated_url} {local_path}")
-
-            # 2. Initialize database with migrations
-            try:
-                init_database_with_migrations(database_url, local_path)
-                logger.info(
-                    f"Database initialized with migrations for tenant {tenant_id}"
-                )
-            except Exception as e:
-                return func.HttpResponse(
-                    json.dumps(
-                        {
-                            "error": f"Failed to initialize database: {str(e)}",
-                            "tenant_id": tenant_id,
-                            "status": "database_error",
-                        }
-                    ),
-                    status_code=500,
-                    mimetype="application/json",
-                )
-
-            # 3. Create new branch for tenant
-            branch_name = f"{BRANCH_PREFIX}/{tenant_id}"
-            logger.info(f"Creating branch: {branch_name}")
-            run_command(f"git checkout -b {branch_name}", cwd=local_path)
-
-            # 4. Create environment file for tenant
-            env_dir = Path(local_path) / "envs"
-            env_dir.mkdir(parents=True, exist_ok=True)
-
-            env_file = env_dir / f".env.{tenant_id}"
-            env_content = f"""TENANT_ID={tenant_id}
-SUPABASE_URL={supabase_url}
-SUPABASE_KEY={supabase_key}
-NEXT_PUBLIC_SUPABASE_URL={supabase_url}
-NEXT_PUBLIC_SUPABASE_ANON_KEY={supabase_key}
-DATABASE_URL={database_url}
-"""
-            env_file.write_text(env_content, encoding="utf-8")
-            logger.info(f"Created environment file: {env_file}")
-
-            # 5. Create Terraform variables file
-            terraform_dir = Path(local_path) / "terraform"
-            terraform_dir.mkdir(parents=True, exist_ok=True)
-
-            tfvars = {
-                "tenant_id": tenant_id,
-                "image_name": f"ghcr.io/keydyy/{IMAGE_NAME}-{tenant_id}:latest",
-                "container_name": f"quiz-app-{tenant_id}",
-                "supabase_url": supabase_url,
-                "supabase_anon_key": supabase_key,
-                "database_url": database_url,
-                "cpu_limit": float(cpu_limit),
-                "memory_limit": memory_limit,
-                "min_replicas": int(min_replicas),
-                "max_replicas": int(max_replicas),
-            }
-
-            tfvars_file = terraform_dir / "terraform.tfvars.json"
-            tfvars_file.write_text(json.dumps(tfvars, indent=2), encoding="utf-8")
-            logger.info(f"Created Terraform variables file: {tfvars_file}")
-
-            # 6. Commit and push changes
-            logger.info("Committing changes...")
-            run_command("git add .", cwd=local_path)
-            run_command(
-                f'git commit -m "Add tenant configuration for {tenant_id}"',
-                cwd=local_path,
-            )
-
-            logger.info("Pushing changes...")
-            run_command(f"git push origin {branch_name}", cwd=local_path)
-
-            # 7. Prepare workflow inputs for GitHub Actions (only include defined inputs)
-            workflow_inputs = {
-                "tenant_id": tenant_id,
-                "supabase_url": supabase_url,
-                "supabase_anon_key": supabase_key,
-                "cpu_limit": str(cpu_limit),
-                "memory_limit": memory_limit,
-                "min_replicas": str(min_replicas),
-                "max_replicas": str(max_replicas),
-            }
-
-            # 8. Trigger GitHub Actions workflow
-            logger.info("Triggering GitHub Actions workflow...")
-            try:
-                workflow_id = trigger_github_workflow(
-                    gh_pat, tenant_id, branch_name, workflow_inputs
-                )
-
-                # Get initial workflow status and container URL
-                deployment_status = get_container_url(gh_pat, workflow_id)
-
-                logger.info(f"Successfully initiated deployment for tenant {tenant_id}")
-
-                return func.HttpResponse(
-                    json.dumps(
-                        {
-                            "message": f"Tenant {tenant_id} deployment initiated successfully",
-                            "tenant_id": tenant_id,
-                            "branch": branch_name,
-                            "container_name": f"quiz-app-{tenant_id}",
-                            "image_name": f"ghcr.io/keydyy/{IMAGE_NAME}-{tenant_id}:latest",
-                            "workflow_id": workflow_id,
-                            "deployment_status": deployment_status,
-                            "github_actions_url": f"https://github.com/keydyy/quiz_app_ct/actions/runs/{workflow_id}",
-                            "database_initialized": True,
-                        }
-                    ),
-                    status_code=200,
-                    mimetype="application/json",
-                )
-
-            except Exception as workflow_error:
-                logger.error(f"Failed to trigger workflow: {str(workflow_error)}")
-                return func.HttpResponse(
-                    json.dumps(
-                        {
-                            "error": f"Failed to trigger deployment: {str(workflow_error)}",
-                            "tenant_id": tenant_id,
-                            "status": "workflow_error",
-                            "database_initialized": True,  # Database was initialized successfully
-                        }
-                    ),
-                    status_code=500,
-                    mimetype="application/json",
-                )
-
+            init_database_with_migrations(database_url, local_path)
+            logger.info(f"Database initialized with migrations for tenant {tenant_id}")
         except Exception as e:
-            logger.exception("Error in tenant creation process")
             return func.HttpResponse(
                 json.dumps(
                     {
-                        "error": f"Failed to create tenant: {str(e)}",
+                        "error": f"Failed to initialize database: {str(e)}",
                         "tenant_id": tenant_id,
-                        "status": "error",
                     }
                 ),
                 status_code=500,
                 mimetype="application/json",
             )
 
-    except Exception as e:
-        logger.exception("Unexpected error in CreateTenant function")
+        # 3. Create new branch for tenant
+        branch_name = f"{BRANCH_PREFIX}/{tenant_id}"
+        logger.info(f"Creating branch: {branch_name}")
+        run_command(f"git checkout -b {branch_name}", cwd=local_path)
+
+        # 4. Create environment file for tenant
+        env_dir = Path(local_path) / "envs"
+        env_dir.mkdir(parents=True, exist_ok=True)
+
+        env_file = env_dir / f".env.{tenant_id}"
+        env_content = f"""TENANT_ID={tenant_id}
+SUPABASE_URL={supabase_url}
+SUPABASE_KEY={supabase_key}
+NEXT_PUBLIC_SUPABASE_URL={supabase_url}
+NEXT_PUBLIC_SUPABASE_ANON_KEY={supabase_key}
+DATABASE_URL={database_url}
+"""
+        env_file.write_text(env_content, encoding="utf-8")
+        logger.info(f"Created environment file: {env_file}")
+
+        # 5. Create Terraform variables file
+        terraform_dir = Path(local_path) / "terraform"
+        terraform_dir.mkdir(parents=True, exist_ok=True)
+
+        tfvars = {
+            "tenant_id": tenant_id,
+            "image_name": f"ghcr.io/keydyy/{IMAGE_NAME}-{tenant_id}:latest",
+            "container_name": f"quiz-app-{tenant_id}",
+            "supabase_url": supabase_url,
+            "supabase_anon_key": supabase_key,
+            "database_url": database_url,
+            "cpu_limit": float(cpu_limit),
+            "memory_limit": memory_limit,
+            "min_replicas": int(min_replicas),
+            "max_replicas": int(max_replicas),
+        }
+
+        tfvars_file = terraform_dir / "terraform.tfvars.json"
+        tfvars_file.write_text(json.dumps(tfvars, indent=2), encoding="utf-8")
+        logger.info(f"Created Terraform variables file: {tfvars_file}")
+
+        # 6. Commit and push changes
+        logger.info("Committing changes...")
+        run_command("git add .", cwd=local_path)
+        run_command(
+            f'git commit -m "Add tenant configuration for {tenant_id}"', cwd=local_path
+        )
+
+        logger.info("Pushing changes...")
+        run_command(f"git push origin {branch_name}", cwd=local_path)
+
+        # 7. Prepare workflow inputs for GitHub Actions
+        workflow_inputs = {
+            "tenant_id": tenant_id,
+            "supabase_url": supabase_url,
+            "supabase_anon_key": supabase_key,
+            "database_url": database_url,
+            "cpu_limit": str(cpu_limit),
+            "memory_limit": memory_limit,
+            "min_replicas": str(min_replicas),
+            "max_replicas": str(max_replicas),
+        }
+
+        # 8. Trigger GitHub Actions workflow
+        logger.info("Triggering GitHub Actions workflow...")
+        workflow_id = trigger_github_workflow(
+            gh_pat, tenant_id, branch_name, workflow_inputs
+        )
+
+        # Get the container URL
+        container_url = get_container_url(gh_pat, workflow_id)
+
+        logger.info(f"Successfully initiated deployment for tenant {tenant_id}")
+
         return func.HttpResponse(
             json.dumps(
                 {
-                    "error": f"Unexpected error: {str(e)}",
-                    "tenant_id": tenant_id if "tenant_id" in locals() else "unknown",
-                    "status": "error",
+                    "message": f"Tenant {tenant_id} deployment initiated successfully",
+                    "tenant_id": tenant_id,
+                    "branch": branch_name,
+                    "container_name": f"quiz-app-{tenant_id}",
+                    "image_name": f"ghcr.io/keydyy/{IMAGE_NAME}-{tenant_id}:latest",
+                    "workflow_id": workflow_id,
+                    "status": "deployment_in_progress",
+                    "github_actions_url": f"https://github.com/keydyy/quiz_app_ct/actions/workflows/{workflow_id}",
+                    "container_url": container_url,
+                    "database_initialized": True,
                 }
             ),
-            status_code=500,
+            status_code=200,
             mimetype="application/json",
+        )
+
+    except Exception as e:
+        logger.exception("Error in CreateTenant function")
+
+        error_response = {
+            "error": f"Failed to create tenant: {str(e)}",
+            "tenant_id": (
+                data.get("tenant_id", "unknown") if "data" in locals() else "unknown"
+            ),
+            "error_type": type(e).__name__,
+        }
+
+        return func.HttpResponse(
+            json.dumps(error_response), status_code=500, mimetype="application/json"
         )
 
     finally:
