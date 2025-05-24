@@ -623,7 +623,6 @@ DATABASE_URL={database_url}
             "tenant_id": tenant_id,
             "supabase_url": supabase_url,
             "supabase_anon_key": supabase_key,
-            "database_url": database_url,
             "cpu_limit": str(cpu_limit),
             "memory_limit": memory_limit,
             "min_replicas": str(min_replicas),
