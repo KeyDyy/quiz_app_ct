@@ -8,6 +8,7 @@ from pathlib import Path
 import azure.functions as func
 import base64
 import requests
+import sys
 
 app = func.FunctionApp()
 
@@ -20,6 +21,12 @@ GITHUB_API_URL = "https://api.github.com"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Add more detailed logging
+logger.info(f"Python version: {sys.version}")
+logger.info(f"Current working directory: {os.getcwd()}")
+logger.info(f"Directory contents: {os.listdir('.')}")
+logger.info(f"PATH: {os.environ.get('PATH', 'Not set')}")
+
 
 def run_command(cmd, cwd=None):
     """Execute shell command and return output with better error handling"""
@@ -27,6 +34,14 @@ def run_command(cmd, cwd=None):
         logger.info(f"Executing command: {cmd}")
         if cwd:
             logger.info(f"Working directory: {cwd}")
+            logger.info(f"Directory exists: {os.path.exists(cwd)}")
+            if os.path.exists(cwd):
+                logger.info(f"Directory contents: {os.listdir(cwd)}")
+
+        # Log environment variables that might affect command execution
+        logger.info(f"PATH: {os.environ.get('PATH', 'Not set')}")
+        logger.info(f"HOME: {os.environ.get('HOME', 'Not set')}")
+        logger.info(f"USERPROFILE: {os.environ.get('USERPROFILE', 'Not set')}")
 
         result = subprocess.run(
             cmd,
@@ -35,6 +50,7 @@ def run_command(cmd, cwd=None):
             capture_output=True,
             text=True,
             timeout=300,  # 5 minutes timeout
+            env=os.environ.copy(),  # Use current environment
         )
 
         if result.stdout:
@@ -50,7 +66,8 @@ def run_command(cmd, cwd=None):
         return result.stdout.strip()
 
     except subprocess.TimeoutExpired:
-        raise Exception(f"Command timed out: {cmd}")
+        logger.error(f"Command timed out: {cmd}")
+        raise
     except Exception as e:
         logger.error(f"Command execution failed: {str(e)}")
         raise
@@ -59,10 +76,20 @@ def run_command(cmd, cwd=None):
 def check_prerequisites():
     """Check if required tools are available"""
     try:
-        run_command("git --version")
-        logger.info("Git is available")
-    except:
-        raise Exception("Git is not installed or not available in PATH")
+        # Try to find git in PATH
+        git_path = shutil.which("git")
+        logger.info(f"Git path: {git_path}")
+
+        if not git_path:
+            logger.error("Git not found in PATH")
+            return False
+
+        result = run_command("git --version")
+        logger.info(f"Git version: {result}")
+        return True
+    except Exception as e:
+        logger.error(f"Error checking git: {str(e)}")
+        return False
 
 
 def trigger_github_workflow(gh_pat, tenant_id, branch_name, workflow_inputs):
@@ -117,9 +144,22 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         logger.info("Starting CreateTenant function")
+        logger.info(f"Request URL: {req.url}")
+        logger.info(f"Request method: {req.method}")
+        logger.info(f"Request headers: {dict(req.headers)}")
 
         # Check prerequisites first
-        check_prerequisites()
+        if not check_prerequisites():
+            return func.HttpResponse(
+                json.dumps(
+                    {
+                        "error": "Git is not available in the function environment",
+                        "details": "The function requires Git to be installed and available in the PATH",
+                    }
+                ),
+                status_code=500,
+                mimetype="application/json",
+            )
 
         # Parse request
         try:
@@ -300,23 +340,20 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY={supabase_key}
 @app.function_name(name="HealthCheck")
 @app.route(route="health", auth_level=func.AuthLevel.ANONYMOUS)
 def health_check(req: func.HttpRequest) -> func.HttpResponse:
+    git_available = check_prerequisites()
+    logger.info(f"Health check - Git available: {git_available}")
+
     return func.HttpResponse(
         json.dumps(
             {
                 "status": "healthy",
                 "message": "Function app is running",
-                "git_available": check_git_availability(),
+                "git_available": git_available,
+                "python_version": sys.version,
+                "working_directory": os.getcwd(),
+                "path": os.environ.get("PATH", "Not set"),
             }
         ),
         status_code=200,
         mimetype="application/json",
     )
-
-
-def check_git_availability():
-    """Check if git is available"""
-    try:
-        result = subprocess.run(["git", "--version"], capture_output=True, text=True)
-        return result.returncode == 0
-    except:
-        return False
