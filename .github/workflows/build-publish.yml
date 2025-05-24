@@ -219,7 +219,7 @@ jobs:
 
       - name: Deployment Summary
         run: |
-          echo "## Deployment Summary 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment Summary " >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Tenant ID | \`${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
