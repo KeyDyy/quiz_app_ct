@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 //import { supabase } from "@/lib/supabase";
 import { getQuizzesData } from "@/lib/fetching";
+import Button from "@/components/Button";
 
 interface QuizData {
   logo: string;
@@ -23,7 +24,7 @@ export default function Home() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        console.log('Current NEXT_PUBLIC_TENANT_ID:', process.env.NEXT_PUBLIC_TENANT_ID);
+
         const quizData = await getQuizzesData();
         setData(quizData);
       } catch (error) {
@@ -43,10 +44,26 @@ export default function Home() {
     }
   };
 
+  const handleCreateQuiz = () => {
+    if (!user) {
+      authModal.onOpen();
+    } else {
+      router.push("/add");
+    }
+  };
+
   return (
-    <div className="bg-gray-100 dark:bg-gray-900 flex justify-center">
-      <main className="max-w-8xl mx-auto p-7">
-        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 ">
+    <div className="bg-gray-100 dark:bg-gray-900 flex flex-col items-center">
+      <div className="w-full max-w-8xl mx-auto p-7">
+        <div className="flex justify-end mb-4">
+          <Button
+            onClick={handleCreateQuiz}
+            className="bg-black text-white px-6 py-3 rounded-xl hover:bg-gray-800 transition-colors"
+          >
+            Stwórz nowy quiz
+          </Button>
+        </div>
+        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {data
             .sort((a, b) =>
               a.description === "AI" ? -1 : b.description === "AI" ? 1 : 0
@@ -63,11 +80,11 @@ export default function Home() {
                     className="w-120 mx-auto rounded-2xl"
                   />
                 </a>
-                <p className="mt-1 text-center font-serif font-semibold ">{quiz.title}</p>
+                <p className="mt-1 text-center font-serif font-semibold">{quiz.title}</p>
               </div>
             ))}
         </section>
-      </main>
+      </div>
     </div>
   );
 }
