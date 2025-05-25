@@ -37,7 +37,6 @@ const AddQuestionPage = () => {
       return;
     }
 
-
     // Check if required fields are provided
     if (!questionText.trim() || options.some(option => !option.trim()) || correctOptionIndex === -1) {
       toast.error('Proszę uzupełnij wszystkie wymagane pola');
@@ -45,7 +44,6 @@ const AddQuestionPage = () => {
     }
 
     try {
-
       // Validate content (optional field)
       if (content && !isValidUrl(content)) {
         toast.error('Proszę wprowadź poprawny adres url obrazka lub pozostaw puste pole');
@@ -68,6 +66,7 @@ const AddQuestionPage = () => {
         options.filter((option) => option.trim() !== "")
       );
 
+      // First, get the quiz_id
       const { data: quizData, error: quizError } = await supabase
         .from("quizzes")
         .select("quiz_id")
@@ -77,10 +76,26 @@ const AddQuestionPage = () => {
       if (quizError) {
         throw quizError;
       }
+
       if (quizData) {
-        // Add the question to the Supabase table
+        // Get the next available question_id
+        const { data: maxIdData, error: maxIdError } = await supabase
+          .from("Questions")
+          .select("question_id")
+          .order("question_id", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (maxIdError && maxIdError.code !== 'PGRST116') { // PGRST116 is "no rows returned" error
+          throw maxIdError;
+        }
+
+        const nextQuestionId = maxIdData ? maxIdData.question_id + 1 : 1;
+
+        // Add the question to the Supabase table with explicit question_id
         const { data, error } = await supabase.from("Questions").insert([
           {
+            question_id: nextQuestionId,
             quiz_id: quizData.quiz_id,
             question_text: questionText,
             content: content,
@@ -93,10 +108,10 @@ const AddQuestionPage = () => {
         if (error) {
           throw error;
         }
+
+        // Redirect to a success page or do any other necessary actions
+        toast.success('Pytanie dodane pomyślnie!');
       }
-      // Redirect to a success page or do any other necessary actions
-      toast.success('Pytanie dodane pomyślnie!');
-      //router.push(`/quiz/${subject}`);
     } catch (error) {
       console.error("Error adding question:", error);
       // Handle error, show a message, etc.
