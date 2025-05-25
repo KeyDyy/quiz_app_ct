@@ -2,7 +2,7 @@ name: Build & Deploy Tenant
 
 on:
   push:
-    branches: [ "main", "deploy/**" ]
+    branches: [ "main" ]
     paths-ignore:
       - '**.md'
       - '.gitignore'
@@ -53,16 +53,10 @@ env:
 
 jobs:
   build_and_deploy:
-    # Skip if:
-    # 1. It's a push event from AzureFunction
-    # 2. It's a push event with commit message containing "Add tenant configuration"
-    # 3. It's a push event that only modified terraform files
+    # Skip if it's a push event from AzureFunction
     if: |
       (github.event_name == 'workflow_dispatch') || 
-      (github.event_name == 'push' && 
-       github.actor != 'AzureFunction' && 
-       !contains(github.event.head_commit.message, 'Add tenant configuration') &&
-       !contains(github.event.head_commit.modified, 'terraform/'))
+      (github.event_name == 'push' && github.actor != 'AzureFunction')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -78,8 +72,6 @@ jobs:
           echo "Actor: ${{ github.actor }}"
           echo "Ref name: ${{ github.ref_name }}"
           echo "Ref: ${{ github.ref }}"
-          echo "Head ref: ${{ github.head_ref }}"
-          echo "Base ref: ${{ github.base_ref }}"
 
       - name: Extract tenant ID and load environment
         id: extract_tenant
@@ -95,44 +87,52 @@ jobs:
             echo "MIN_REPLICAS=${{ github.event.inputs.min_replicas }}" >> $GITHUB_ENV
             echo "MAX_REPLICAS=${{ github.event.inputs.max_replicas }}" >> $GITHUB_ENV
           else
-            # Extract tenant ID from branch name (deploy/tenant123 -> tenant123)
-            BRANCH_NAME="${{ github.ref_name }}"
-            if [[ $BRANCH_NAME == deploy/* ]]; then
-              TENANT_ID="${BRANCH_NAME#deploy/}"
-              echo "TENANT_ID=$TENANT_ID" >> $GITHUB_ENV
-              
-              # Get environment variables from Azure Function
-              AZURE_FUNCTION_URL="${{ secrets.AZURE_FUNCTION_URL }}"
-              AZURE_FUNCTION_KEY="${{ secrets.AZURE_FUNCTION_KEY }}"
-              
-              # Call Azure Function to get tenant configuration
-              RESPONSE=$(curl -s -H "x-functions-key: $AZURE_FUNCTION_KEY" \
-                "$AZURE_FUNCTION_URL/api/get-tenant-config?tenant_id=$TENANT_ID")
-              
-              if [[ $? -eq 0 ]]; then
-                # Parse response and set environment variables
-                SUPABASE_URL=$(echo $RESPONSE | jq -r '.supabase_url')
-                SUPABASE_KEY=$(echo $RESPONSE | jq -r '.supabase_anon_key')
-                DATABASE_URL=$(echo $RESPONSE | jq -r '.database_url')
-                CPU_LIMIT=$(echo $RESPONSE | jq -r '.cpu_limit // "0.5"')
-                MEMORY_LIMIT=$(echo $RESPONSE | jq -r '.memory_limit // "1Gi"')
-                MIN_REPLICAS=$(echo $RESPONSE | jq -r '.min_replicas // "1"')
-                MAX_REPLICAS=$(echo $RESPONSE | jq -r '.max_replicas // "3"')
+            # For push events, get tenant ID from Azure Function
+            AZURE_FUNCTION_URL="${{ secrets.AZURE_FUNCTION_URL }}"
+            AZURE_FUNCTION_KEY="${{ secrets.AZURE_FUNCTION_KEY }}"
+            
+            # Get list of all tenants from Azure Function
+            RESPONSE=$(curl -s -H "x-functions-key: $AZURE_FUNCTION_KEY" \
+              "$AZURE_FUNCTION_URL/api/get-tenant-config")
+            
+            if [[ $? -eq 0 ]]; then
+              # Get the first tenant ID (you might want to modify this logic based on your needs)
+              TENANT_ID=$(echo $RESPONSE | jq -r '.[0].tenant_id')
+              if [[ -n "$TENANT_ID" ]]; then
+                echo "TENANT_ID=$TENANT_ID" >> $GITHUB_ENV
                 
-                # Set environment variables
-                echo "SUPABASE_URL=$SUPABASE_URL" >> $GITHUB_ENV
-                echo "SUPABASE_KEY=$SUPABASE_KEY" >> $GITHUB_ENV
-                echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
-                echo "CPU_LIMIT=$CPU_LIMIT" >> $GITHUB_ENV
-                echo "MEMORY_LIMIT=$MEMORY_LIMIT" >> $GITHUB_ENV
-                echo "MIN_REPLICAS=$MIN_REPLICAS" >> $GITHUB_ENV
-                echo "MAX_REPLICAS=$MAX_REPLICAS" >> $GITHUB_ENV
+                # Get tenant configuration
+                RESPONSE=$(curl -s -H "x-functions-key: $AZURE_FUNCTION_KEY" \
+                  "$AZURE_FUNCTION_URL/api/get-tenant-config?tenant_id=$TENANT_ID")
+                
+                if [[ $? -eq 0 ]]; then
+                  # Parse response and set environment variables
+                  SUPABASE_URL=$(echo $RESPONSE | jq -r '.supabase_url')
+                  SUPABASE_KEY=$(echo $RESPONSE | jq -r '.supabase_anon_key')
+                  DATABASE_URL=$(echo $RESPONSE | jq -r '.database_url')
+                  CPU_LIMIT=$(echo $RESPONSE | jq -r '.cpu_limit // "0.5"')
+                  MEMORY_LIMIT=$(echo $RESPONSE | jq -r '.memory_limit // "1Gi"')
+                  MIN_REPLICAS=$(echo $RESPONSE | jq -r '.min_replicas // "1"')
+                  MAX_REPLICAS=$(echo $RESPONSE | jq -r '.max_replicas // "3"')
+                  
+                  # Set environment variables
+                  echo "SUPABASE_URL=$SUPABASE_URL" >> $GITHUB_ENV
+                  echo "SUPABASE_KEY=$SUPABASE_KEY" >> $GITHUB_ENV
+                  echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
+                  echo "CPU_LIMIT=$CPU_LIMIT" >> $GITHUB_ENV
+                  echo "MEMORY_LIMIT=$MEMORY_LIMIT" >> $GITHUB_ENV
+                  echo "MIN_REPLICAS=$MIN_REPLICAS" >> $GITHUB_ENV
+                  echo "MAX_REPLICAS=$MAX_REPLICAS" >> $GITHUB_ENV
+                else
+                  echo "Error: Failed to get tenant configuration from Azure Function"
+                  exit 1
+                fi
               else
-                echo "Error: Failed to get tenant configuration from Azure Function"
+                echo "Error: No tenant ID found"
                 exit 1
               fi
             else
-              echo "Error: Not a deploy branch"
+              echo "Error: Failed to get tenant list from Azure Function"
               exit 1
             fi
           fi
