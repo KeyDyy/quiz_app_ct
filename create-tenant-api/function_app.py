@@ -473,13 +473,8 @@ def get_container_url(gh_pat: str, workflow_run_id: str) -> str:
 @app.function_name(name="CreateTenant")
 @app.route(route="create-tenant", auth_level=func.AuthLevel.FUNCTION)
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    local_path = None
-
     try:
         logger.info("Starting CreateTenant function")
-
-        # Check prerequisites first
-        check_prerequisites()
 
         # Parse request
         try:
@@ -501,9 +496,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         tenant_id = data.get("tenant_id")
         supabase_url = data.get("supabase_url")
         supabase_key = data.get("supabase_anon_key")
-        database_url = data.get(
-            "database_url"
-        )  # New parameter for direct DB connection
+        database_url = data.get("database_url")
         gh_pat = data.get("gh_pat")
 
         # Optional parameters for container configuration
@@ -536,25 +529,21 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json",
             )
 
-        # Create temporary directory (cross-platform)
-        local_path = tempfile.mkdtemp(prefix=f"tenant-{tenant_id}-")
-        logger.info(f"Using temporary directory: {local_path}")
+        # Store tenant configuration in environment variables
+        os.environ[f"SUPABASE_URL_{tenant_id}"] = supabase_url
+        os.environ[f"SUPABASE_KEY_{tenant_id}"] = supabase_key
+        os.environ[f"DATABASE_URL_{tenant_id}"] = database_url
+        os.environ[f"CPU_LIMIT_{tenant_id}"] = str(cpu_limit)
+        os.environ[f"MEMORY_LIMIT_{tenant_id}"] = str(memory_limit)
+        os.environ[f"MIN_REPLICAS_{tenant_id}"] = str(min_replicas)
+        os.environ[f"MAX_REPLICAS_{tenant_id}"] = str(max_replicas)
 
-        # Set git configuration
-        os.environ["GIT_AUTHOR_NAME"] = "AzureFunction"
-        os.environ["GIT_AUTHOR_EMAIL"] = "azure@function.local"
-        os.environ["GIT_COMMITTER_NAME"] = "AzureFunction"
-        os.environ["GIT_COMMITTER_EMAIL"] = "azure@function.local"
-
-        # 1. Clone repository
-        logger.info("Cloning repository...")
-        authenticated_url = REPO_URL.replace("https://", f"https://{gh_pat}@")
-        run_command(f"git clone --branch main {authenticated_url} {local_path}")
-
-        # 2. Initialize database with migrations
+        # Initialize database
         try:
-            init_database_with_migrations(database_url, local_path)
-            logger.info(f"Database initialized with migrations for tenant {tenant_id}")
+            connection = connect_to_database(database_url)
+            # ... rest of database initialization code ...
+            connection.close()
+            logger.info(f"Database initialized for tenant {tenant_id}")
         except Exception as e:
             return func.HttpResponse(
                 json.dumps(
@@ -567,72 +556,22 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json",
             )
 
-        # 3. Create new branch for tenant
-        branch_name = f"{BRANCH_PREFIX}/{tenant_id}"
-        logger.info(f"Creating branch: {branch_name}")
-        run_command(f"git checkout -b {branch_name}", cwd=local_path)
-
-        # 4. Create environment file for tenant
-        env_dir = Path(local_path) / "envs"
-        env_dir.mkdir(parents=True, exist_ok=True)
-
-        env_file = env_dir / f".env.{tenant_id}"
-        env_content = f"""TENANT_ID={tenant_id}
-SUPABASE_URL={supabase_url}
-SUPABASE_KEY={supabase_key}
-NEXT_PUBLIC_SUPABASE_URL={supabase_url}
-NEXT_PUBLIC_SUPABASE_ANON_KEY={supabase_key}
-DATABASE_URL={database_url}
-"""
-        env_file.write_text(env_content, encoding="utf-8")
-        logger.info(f"Created environment file: {env_file}")
-
-        # 5. Create Terraform variables file
-        terraform_dir = Path(local_path) / "terraform"
-        terraform_dir.mkdir(parents=True, exist_ok=True)
-
-        tfvars = {
-            "tenant_id": tenant_id,
-            "image_name": f"ghcr.io/keydyy/{IMAGE_NAME}-{tenant_id}:latest",
-            "container_name": f"quiz-app-{tenant_id}",
-            "supabase_url": supabase_url,
-            "supabase_anon_key": supabase_key,
-            "database_url": database_url,
-            "cpu_limit": float(cpu_limit),
-            "memory_limit": memory_limit,
-            "min_replicas": int(min_replicas),
-            "max_replicas": int(max_replicas),
-        }
-
-        tfvars_file = terraform_dir / "terraform.tfvars.json"
-        tfvars_file.write_text(json.dumps(tfvars, indent=2), encoding="utf-8")
-        logger.info(f"Created Terraform variables file: {tfvars_file}")
-
-        # 6. Commit and push changes
-        logger.info("Committing changes...")
-        run_command("git add .", cwd=local_path)
-        run_command(
-            f'git commit -m "Add tenant configuration for {tenant_id}"', cwd=local_path
-        )
-
-        logger.info("Pushing changes...")
-        run_command(f"git push origin {branch_name}", cwd=local_path)
-
-        # 7. Prepare workflow inputs for GitHub Actions
+        # Prepare workflow inputs for GitHub Actions
         workflow_inputs = {
             "tenant_id": tenant_id,
             "supabase_url": supabase_url,
             "supabase_anon_key": supabase_key,
+            "database_url": database_url,
             "cpu_limit": str(cpu_limit),
             "memory_limit": memory_limit,
             "min_replicas": str(min_replicas),
             "max_replicas": str(max_replicas),
         }
 
-        # 8. Trigger GitHub Actions workflow
+        # Trigger GitHub Actions workflow
         logger.info("Triggering GitHub Actions workflow...")
         workflow_id = trigger_github_workflow(
-            gh_pat, tenant_id, branch_name, workflow_inputs
+            gh_pat, tenant_id, f"deploy/{tenant_id}", workflow_inputs
         )
 
         # Get the container URL
@@ -645,7 +584,7 @@ DATABASE_URL={database_url}
                 {
                     "message": f"Tenant {tenant_id} deployment initiated successfully",
                     "tenant_id": tenant_id,
-                    "branch": branch_name,
+                    "branch": f"deploy/{tenant_id}",
                     "container_name": f"quiz-app-{tenant_id}",
                     "image_name": f"ghcr.io/keydyy/{IMAGE_NAME}-{tenant_id}:latest",
                     "workflow_id": workflow_id,
@@ -661,27 +600,16 @@ DATABASE_URL={database_url}
 
     except Exception as e:
         logger.exception("Error in CreateTenant function")
-
-        error_response = {
-            "error": f"Failed to create tenant: {str(e)}",
-            "tenant_id": (
-                data.get("tenant_id", "unknown") if "data" in locals() else "unknown"
-            ),
-            "error_type": type(e).__name__,
-        }
-
         return func.HttpResponse(
-            json.dumps(error_response), status_code=500, mimetype="application/json"
+            json.dumps(
+                {
+                    "error": f"Failed to create tenant: {str(e)}",
+                    "tenant_id": tenant_id if "tenant_id" in locals() else "unknown",
+                }
+            ),
+            status_code=500,
+            mimetype="application/json",
         )
-
-    finally:
-        # Clean up temporary directory
-        if local_path and os.path.exists(local_path):
-            try:
-                shutil.rmtree(local_path)
-                logger.info(f"Cleaned up temporary directory: {local_path}")
-            except Exception as cleanup_error:
-                logger.warning(f"Failed to cleanup {local_path}: {cleanup_error}")
 
 
 # Database initialization test endpoint
@@ -853,3 +781,57 @@ def check_git_availability():
         return result.returncode == 0
     except:
         return False
+
+
+@app.function_name(name="GetTenantConfig")
+@app.route(route="get-tenant-config", auth_level=func.AuthLevel.FUNCTION)
+def get_tenant_config(req: func.HttpRequest) -> func.HttpResponse:
+    """Get tenant configuration from Azure Function"""
+    try:
+        # Get tenant_id from query parameters
+        tenant_id = req.params.get("tenant_id")
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"error": "Missing tenant_id parameter"}),
+                status_code=400,
+                mimetype="application/json",
+            )
+
+        # Get configuration from environment variables or database
+        # For now, we'll use environment variables, but you might want to store this in a database
+        config = {
+            "tenant_id": tenant_id,
+            "supabase_url": os.environ.get(f"SUPABASE_URL_{tenant_id}"),
+            "supabase_anon_key": os.environ.get(f"SUPABASE_KEY_{tenant_id}"),
+            "database_url": os.environ.get(f"DATABASE_URL_{tenant_id}"),
+            "cpu_limit": os.environ.get(f"CPU_LIMIT_{tenant_id}", "0.5"),
+            "memory_limit": os.environ.get(f"MEMORY_LIMIT_{tenant_id}", "1Gi"),
+            "min_replicas": os.environ.get(f"MIN_REPLICAS_{tenant_id}", "1"),
+            "max_replicas": os.environ.get(f"MAX_REPLICAS_{tenant_id}", "3"),
+        }
+
+        # Validate required fields
+        if not all(
+            [
+                config["supabase_url"],
+                config["supabase_anon_key"],
+                config["database_url"],
+            ]
+        ):
+            return func.HttpResponse(
+                json.dumps({"error": "Missing required configuration for tenant"}),
+                status_code=404,
+                mimetype="application/json",
+            )
+
+        return func.HttpResponse(
+            json.dumps(config), status_code=200, mimetype="application/json"
+        )
+
+    except Exception as e:
+        logger.exception("Error in GetTenantConfig function")
+        return func.HttpResponse(
+            json.dumps({"error": f"Failed to get tenant configuration: {str(e)}"}),
+            status_code=500,
+            mimetype="application/json",
+        )

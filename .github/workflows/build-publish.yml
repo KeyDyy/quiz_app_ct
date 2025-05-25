@@ -21,6 +21,10 @@ on:
         description: 'Supabase Anonymous Key'
         required: true
         type: string
+      database_url:
+        description: 'Database URL'
+        required: true
+        type: string
       cpu_limit:
         description: 'CPU Limit'  
         required: false
@@ -85,6 +89,7 @@ jobs:
             echo "TENANT_ID=${{ github.event.inputs.tenant_id }}" >> $GITHUB_ENV
             echo "SUPABASE_URL=${{ github.event.inputs.supabase_url }}" >> $GITHUB_ENV
             echo "SUPABASE_KEY=${{ github.event.inputs.supabase_anon_key }}" >> $GITHUB_ENV
+            echo "DATABASE_URL=${{ github.event.inputs.database_url }}" >> $GITHUB_ENV
             echo "CPU_LIMIT=${{ github.event.inputs.cpu_limit }}" >> $GITHUB_ENV
             echo "MEMORY_LIMIT=${{ github.event.inputs.memory_limit }}" >> $GITHUB_ENV
             echo "MIN_REPLICAS=${{ github.event.inputs.min_replicas }}" >> $GITHUB_ENV
@@ -96,29 +101,34 @@ jobs:
               TENANT_ID="${BRANCH_NAME#deploy/}"
               echo "TENANT_ID=$TENANT_ID" >> $GITHUB_ENV
               
-              # Load tenant config from env file
-              ENV_FILE="envs/.env.$TENANT_ID"
-              echo "Looking for environment file: $ENV_FILE"
+              # Get environment variables from Azure Function
+              AZURE_FUNCTION_URL="${{ secrets.AZURE_FUNCTION_URL }}"
+              AZURE_FUNCTION_KEY="${{ secrets.AZURE_FUNCTION_KEY }}"
               
-              if [[ -f "$ENV_FILE" ]]; then
-                echo "Found environment file, loading variables..."
-                # Read each line and export variables
-                while IFS= read -r line || [[ -n "$line" ]]; do
-                  # Skip empty lines and comments
-                  [[ -z "$line" || "$line" =~ ^# ]] && continue
-                  # Export the variable
-                  export "$line"
-                  # Add to GITHUB_ENV
-                  echo "$line" >> $GITHUB_ENV
-                done < "$ENV_FILE"
-                echo "Environment variables loaded successfully"
+              # Call Azure Function to get tenant configuration
+              RESPONSE=$(curl -s -H "x-functions-key: $AZURE_FUNCTION_KEY" \
+                "$AZURE_FUNCTION_URL/api/get-tenant-config?tenant_id=$TENANT_ID")
+              
+              if [[ $? -eq 0 ]]; then
+                # Parse response and set environment variables
+                SUPABASE_URL=$(echo $RESPONSE | jq -r '.supabase_url')
+                SUPABASE_KEY=$(echo $RESPONSE | jq -r '.supabase_anon_key')
+                DATABASE_URL=$(echo $RESPONSE | jq -r '.database_url')
+                CPU_LIMIT=$(echo $RESPONSE | jq -r '.cpu_limit // "0.5"')
+                MEMORY_LIMIT=$(echo $RESPONSE | jq -r '.memory_limit // "1Gi"')
+                MIN_REPLICAS=$(echo $RESPONSE | jq -r '.min_replicas // "1"')
+                MAX_REPLICAS=$(echo $RESPONSE | jq -r '.max_replicas // "3"')
+                
+                # Set environment variables
+                echo "SUPABASE_URL=$SUPABASE_URL" >> $GITHUB_ENV
+                echo "SUPABASE_KEY=$SUPABASE_KEY" >> $GITHUB_ENV
+                echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
+                echo "CPU_LIMIT=$CPU_LIMIT" >> $GITHUB_ENV
+                echo "MEMORY_LIMIT=$MEMORY_LIMIT" >> $GITHUB_ENV
+                echo "MIN_REPLICAS=$MIN_REPLICAS" >> $GITHUB_ENV
+                echo "MAX_REPLICAS=$MAX_REPLICAS" >> $GITHUB_ENV
               else
-                echo "Error: Environment file not found at $ENV_FILE"
-                echo "Current directory: $(pwd)"
-                echo "Directory contents:"
-                ls -R
-                echo "envs directory contents:"
-                ls -la envs/ || echo "envs directory not found"
+                echo "Error: Failed to get tenant configuration from Azure Function"
                 exit 1
               fi
             else
