@@ -377,9 +377,9 @@ def trigger_github_workflow(gh_pat, tenant_id, branch_name, workflow_inputs):
                 f"Build & Deploy Tenant workflow not found. Available workflows: {available_workflows}"
             )
 
-        # Trigger the workflow with inputs
+        # Trigger the workflow with inputs using main branch
         trigger_url = f"{GITHUB_API_URL}/repos/keydyy/quiz_app_ct/actions/workflows/{build_workflow['id']}/dispatches"
-        payload = {"ref": branch_name, "inputs": workflow_inputs}
+        payload = {"ref": "main", "inputs": workflow_inputs}  # Always use main branch
 
         logger.info(f"Triggering workflow at: {trigger_url}")
         response = requests.post(trigger_url, headers=headers, json=payload, timeout=30)
@@ -571,7 +571,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # Trigger GitHub Actions workflow
         logger.info("Triggering GitHub Actions workflow...")
         workflow_id = trigger_github_workflow(
-            gh_pat, tenant_id, f"deploy/{tenant_id}", workflow_inputs
+            gh_pat, tenant_id, "main", workflow_inputs  # Use main branch
         )
 
         # Get the container URL
@@ -584,7 +584,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 {
                     "message": f"Tenant {tenant_id} deployment initiated successfully",
                     "tenant_id": tenant_id,
-                    "branch": f"deploy/{tenant_id}",
                     "container_name": f"quiz-app-{tenant_id}",
                     "image_name": f"ghcr.io/keydyy/{IMAGE_NAME}-{tenant_id}:latest",
                     "workflow_id": workflow_id,
