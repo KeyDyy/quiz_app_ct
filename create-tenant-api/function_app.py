@@ -473,6 +473,7 @@ def get_container_url(gh_pat: str, workflow_run_id: str) -> str:
 @app.function_name(name="CreateTenant")
 @app.route(route="create-tenant", auth_level=func.AuthLevel.FUNCTION)
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    local_path = None
     try:
         logger.info("Starting CreateTenant function")
 
@@ -538,19 +539,72 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         os.environ[f"MIN_REPLICAS_{tenant_id}"] = str(min_replicas)
         os.environ[f"MAX_REPLICAS_{tenant_id}"] = str(max_replicas)
 
-        # Initialize database
+        # Create temporary directory for database initialization
+        local_path = tempfile.mkdtemp(prefix=f"db-init-{tenant_id}-")
+        logger.info(f"Using temporary directory: {local_path}")
+
+        # Clone repository to get migration files
+        logger.info("Cloning repository to get migration files...")
+        authenticated_url = REPO_URL.replace("https://", f"https://{gh_pat}@")
+        run_command(f"git clone --branch main {authenticated_url} {local_path}")
+
+        # Initialize database with migrations
         try:
+            logger.info("Initializing database with migrations...")
+            init_database_with_migrations(database_url, local_path)
+
+            # Verify database structure
             connection = connect_to_database(database_url)
-            # ... rest of database initialization code ...
+            cursor = connection.cursor()
+
+            # Get all tables
+            cursor.execute(
+                """
+                SELECT table_name, table_type 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                ORDER BY table_name
+            """
+            )
+            tables = cursor.fetchall()
+
+            # Get table information
+            table_info = {}
+            for table_name, table_type in tables:
+                cursor.execute(
+                    f"""
+                    SELECT column_name, data_type, is_nullable, column_default
+                    FROM information_schema.columns 
+                    WHERE table_schema = 'public' AND table_name = '{table_name}'
+                    ORDER BY ordinal_position
+                """
+                )
+                columns = cursor.fetchall()
+                table_info[table_name] = {
+                    "type": table_type,
+                    "columns": [
+                        {
+                            "name": col[0],
+                            "type": col[1],
+                            "nullable": col[2],
+                            "default": col[3],
+                        }
+                        for col in columns
+                    ],
+                }
+
+            cursor.close()
             connection.close()
-            logger.info(f"Database initialized for tenant {tenant_id}")
+
+            logger.info(f"Database initialized successfully for tenant {tenant_id}")
+            logger.info(f"Created tables: {', '.join([table[0] for table in tables])}")
+
         except Exception as e:
+            error_msg = f"Failed to initialize database: {str(e)}"
+            logger.error(error_msg)
             return func.HttpResponse(
                 json.dumps(
-                    {
-                        "error": f"Failed to initialize database: {str(e)}",
-                        "tenant_id": tenant_id,
-                    }
+                    {"error": error_msg, "tenant_id": tenant_id, "status": "error"}
                 ),
                 status_code=500,
                 mimetype="application/json",
