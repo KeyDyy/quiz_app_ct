@@ -45,6 +45,11 @@ on:
         required: false
         default: '3'
         type: string
+      create_new_environment:
+        description: 'Create New Environment'
+        required: false
+        default: 'false'
+        type: string
 
 env:
   IMAGE_NAME: quiz_app_ct
@@ -86,6 +91,7 @@ jobs:
             echo "MEMORY_LIMIT=${{ github.event.inputs.memory_limit }}" >> $GITHUB_ENV
             echo "MIN_REPLICAS=${{ github.event.inputs.min_replicas }}" >> $GITHUB_ENV
             echo "MAX_REPLICAS=${{ github.event.inputs.max_replicas }}" >> $GITHUB_ENV
+            echo "CREATE_NEW_ENVIRONMENT=${{ github.event.inputs.create_new_environment }}" >> $GITHUB_ENV
           else
             # For push events, get tenant ID from Azure Function
             AZURE_FUNCTION_URL="${{ secrets.AZURE_FUNCTION_URL }}"
@@ -123,6 +129,7 @@ jobs:
                   echo "MEMORY_LIMIT=$MEMORY_LIMIT" >> $GITHUB_ENV
                   echo "MIN_REPLICAS=$MIN_REPLICAS" >> $GITHUB_ENV
                   echo "MAX_REPLICAS=$MAX_REPLICAS" >> $GITHUB_ENV
+                  echo "CREATE_NEW_ENVIRONMENT=${{ github.event.inputs.create_new_environment }}" >> $GITHUB_ENV
                 else
                   echo "Error: Failed to get tenant configuration from Azure Function"
                   exit 1
@@ -192,8 +199,30 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Create Storage Account for Terraform State
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
+        run: |
+          # Create storage account if it doesn't exist
+          az storage account create \
+            --name quizapptfstate \
+            --resource-group quizapp \
+            --location "North Europe" \
+            --sku Standard_LRS \
+            --encryption-services blob
+
+          # Create container if it doesn't exist
+          az storage container create \
+            --name tfstate \
+            --account-name quizapptfstate \
+            --auth-mode login
+
       - name: Terraform Init
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="storage_account_name=quizapptfstate" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="resource_group_name=quizapp"
 
       - name: Terraform Plan
         run: |
