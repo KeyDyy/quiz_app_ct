@@ -187,13 +187,20 @@ jobs:
         with:
           terraform_version: 1.6.0
 
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # POPRAWKA: Usuń Azure Login - będziemy używać zmiennych środowiskowych
+      # - name: Azure Login
+      #   uses: azure/login@v1
+      #   with:
+      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Terraform Init
         run: terraform init
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: false
 
       - name: Terraform Plan
         run: |
@@ -213,9 +220,21 @@ jobs:
               } \
             }" \
             -out=tfplan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: false
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: false
 
       - name: Update Tenant State in Blob Storage
         run: |
@@ -250,11 +269,11 @@ jobs:
             curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
           fi
           
-          # Login to Azure using service principal
+          # POPRAWKA: Użyj Service Principal credentials z secrets
           az login --service-principal \
-            --username ${{ secrets.AZURE_CLIENT_ID }} \
-            --password ${{ secrets.AZURE_CLIENT_SECRET }} \
-            --tenant ${{ secrets.AZURE_TENANT_ID }}
+            --username ${{ secrets.ARM_CLIENT_ID }} \
+            --password ${{ secrets.ARM_CLIENT_SECRET }} \
+            --tenant ${{ secrets.ARM_TENANT_ID }}
           
           # Upload tenant state to blob storage
           echo "$TENANT_STATE" | az storage blob upload \
@@ -264,16 +283,28 @@ jobs:
             --content-type "application/json" \
             --overwrite true \
             --file -
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: false
 
       - name: Get Container App URL
         id: get_url
         run: |
-          FQDN=$(terraform output -raw container_app_fqdn 2>/dev/null || echo "")
-          if [[ -n "$FQDN" ]]; then
+          FQDN=$(terraform output -raw container_app_fqdns | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]' 2>/dev/null || echo "")
+          if [[ -n "$FQDN" && "$FQDN" != "null" ]]; then
             echo "container_url=https://$FQDN" >> $GITHUB_OUTPUT
           else
             echo "container_url=Not available yet" >> $GITHUB_OUTPUT
           fi
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: false
 
       - name: Deployment Summary
         run: |

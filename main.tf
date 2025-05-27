@@ -17,33 +17,7 @@ terraform {
 
 provider "azurerm" {
   features {}
-  client_id       = var.client_id
-  client_secret   = var.client_secret
-  tenant_id       = var.tenant_id
-  subscription_id = var.subscription_id
-}
-
-variable "client_id" {
-  description = "Azure Client ID"
-  type        = string
-  sensitive   = true
-}
-
-variable "client_secret" {
-  description = "Azure Client Secret"
-  type        = string
-  sensitive   = true
-}
-
-variable "tenant_id" {
-  description = "Azure Tenant ID"
-  type        = string
-  sensitive   = true
-}
-
-variable "subscription_id" {
-  description = "Azure Subscription ID"
-  type        = string
+  # subscription_id  = "235ed9ed-d344-429b-b677-f295a9d36fc2"
 }
 
 # Variables
