@@ -41,10 +41,14 @@ jobs:
 
       - name: Set Azure Environment Variables for Terraform
         run: |
+          # Set ARM provider environment variables
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
           echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+          # Disable Azure CLI and OIDC authentication
+          echo "ARM_USE_CLI=false" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=false" >> $GITHUB_ENV
 
       - name: Create Test Resource Group
         run: |
@@ -75,19 +79,6 @@ jobs:
 
       - name: Terraform Init
         run: |
-          # Create provider configuration file
-          cat > provider.tf <<EOF
-          provider "azurerm" {
-            features {}
-            use_oidc = false
-            use_cli = false
-            client_id       = "${{ secrets.AZURE_CLIENT_ID }}"
-            client_secret   = "${{ secrets.AZURE_CLIENT_SECRET }}"
-            tenant_id       = "${{ secrets.AZURE_TENANT_ID }}"
-            subscription_id = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          }
-          EOF
-
           terraform init \
             -backend-config="resource_group_name=${{ env.RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=quizappteststate" \
