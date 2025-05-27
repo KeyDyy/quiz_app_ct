@@ -134,7 +134,7 @@ jobs:
                   echo "MEMORY_LIMIT=$MEMORY_LIMIT" >> $GITHUB_ENV
                   echo "MIN_REPLICAS=$MIN_REPLICAS" >> $GITHUB_ENV
                   echo "MAX_REPLICAS=$MAX_REPLICAS" >> $GITHUB_ENV
-                  echo "CREATE_NEW_ENVIRONMENT=${{ github.event.inputs.create_new_environment }}" >> $GITHUB_ENV
+                  echo "CREATE_NEW_ENVIRONMENT=false" >> $GITHUB_ENV
                 else
                   echo "Error: Failed to get tenant configuration from Azure Function"
                   exit 1
@@ -167,7 +167,8 @@ jobs:
           echo "Environment variables validated successfully"
           echo "TENANT_ID: $TENANT_ID"
           echo "SUPABASE_URL: $SUPABASE_URL"
-          echo "SUPABASE_KEY: [REDACTED]"
+          echo "CPU_LIMIT: $CPU_LIMIT"
+          echo "MEMORY_LIMIT: $MEMORY_LIMIT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -199,30 +200,37 @@ jobs:
         with:
           terraform_version: 1.6.0
 
-      - name: Azure Login
+      - name: Azure Login with OIDC
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Set Azure Environment Variables
+      - name: Set Azure Environment Variables for Terraform
         run: |
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
           echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
-          echo "ARM_USE_AZUREAD=true" >> $GITHUB_ENV
 
       - name: Create Storage Account for Terraform State
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
         run: |
+          # Create resource group if it doesn't exist
+          az group create \
+            --name quizapp \
+            --location "North Europe"
+
           # Create storage account if it doesn't exist
           az storage account create \
             --name quizapptfstate \
             --resource-group quizapp \
             --location "North Europe" \
             --sku Standard_LRS \
-            --encryption-services blob
+            --encryption-services blob \
+            --https-only true \
+            --min-tls-version TLS1_2
 
           # Create container if it doesn't exist
           az storage container create \
@@ -232,11 +240,12 @@ jobs:
 
       - name: Terraform Init
         run: |
+          cd terraform
           terraform init \
             -backend-config="resource_group_name=quizapp" \
             -backend-config="storage_account_name=quizapptfstate" \
             -backend-config="container_name=tfstate" \
-            -backend-config="key=terraform.tfstate" \
+            -backend-config="key=${{ env.TENANT_ID }}-terraform.tfstate" \
             -backend-config="use_oidc=true" \
             -backend-config="use_azuread_auth=true" \
             -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
@@ -244,12 +253,13 @@ jobs:
 
       - name: Terraform Plan
         run: |
+          cd terraform
           terraform plan \
             -var="github_repository=keydyy/quiz_app_ct" \
             -var="ghcr_username=keydyy" \
             -var="ghcr_pat=${{ secrets.GH_PAT }}" \
-            -var="create_new_environment=false" \
-            -var="image_name=quiz_app_ct" \
+            -var="create_new_environment=${{ env.CREATE_NEW_ENVIRONMENT }}" \
+            -var="image_name=${{ env.IMAGE_NAME }}" \
             -var="container_apps={ \
               \"${{ env.TENANT_ID }}\" = { \
                 name = \"quiz-app-${{ env.TENANT_ID }}\", \
@@ -262,10 +272,25 @@ jobs:
             -out=tfplan
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
-
-      - name: Verify Tenant State
         run: |
+          cd terraform
+          terraform apply -auto-approve tfplan
+
+      - name: Get Container App URL
+        id: get_url
+        run: |
+          cd terraform
+          CONTAINER_APP_URLS=$(terraform output -json container_app_urls)
+          CONTAINER_URL=$(echo $CONTAINER_APP_URLS | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')
+          if [[ -n "$CONTAINER_URL" && "$CONTAINER_URL" != "null" ]]; then
+            echo "container_url=https://$CONTAINER_URL" >> $GITHUB_OUTPUT
+          else
+            echo "container_url=Not available yet" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify Deployment
+        run: |
+          cd terraform
           # Get storage account connection string
           STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
           
@@ -276,60 +301,16 @@ jobs:
             --name "${{ env.TENANT_ID }}/state.json" \
             --auth-mode key
 
-      - name: Update Tenant State
-        if: success()
-        run: |
-          # Get storage account connection string
-          STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
-          
-          # Get container app details
-          CONTAINER_APP_ID=$(terraform output -json container_app_urls | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')
-          
-          # Create tenant state JSON
-          TENANT_STATE=$(cat <<EOF
-          {
-            "tenant_id": "${{ env.TENANT_ID }}",
-            "name": "quiz-app-${{ env.TENANT_ID }}",
-            "supabase_url": "${{ env.SUPABASE_URL }}",
-            "supabase_anon_key": "${{ env.SUPABASE_KEY }}",
-            "cpu": ${{ env.CPU_LIMIT }},
-            "memory": "${{ env.MEMORY_LIMIT }}",
-            "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "container_app_url": "$CONTAINER_APP_ID",
-            "last_updated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "status": "active"
-          }
-          EOF
-          )
-          
-          # Upload tenant state
-          echo "$TENANT_STATE" | az storage blob upload \
-            --connection-string "$STORAGE_CONNECTION_STRING" \
-            --container-name "tenant-states" \
-            --name "${{ env.TENANT_ID }}/state.json" \
-            --auth-mode key \
-            --content-type "application/json" \
-            --overwrite true
-
-      - name: Get Container App URL
-        id: get_url
-        run: |
-          FQDN=$(terraform output -raw container_app_fqdn 2>/dev/null || echo "")
-          if [[ -n "$FQDN" ]]; then
-            echo "container_url=https://$FQDN" >> $GITHUB_OUTPUT
-          else
-            echo "container_url=Not available yet" >> $GITHUB_OUTPUT
-          fi
-
       - name: Deployment Summary
         run: |
-          echo "## Deployment Summary " >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Tenant ID | \`${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_STEP_SUMMARY
+          echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Docker Image | \`${{ env.REGISTRY }}/${{ env.GITHUB_REPOSITORY_OWNER }}/${{ env.IMAGE_NAME }}-${{ env.TENANT_ID }}:latest\` |" >> $GITHUB_STEP_SUMMARY
           echo "| CPU Limit | ${{ env.CPU_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Memory Limit | ${{ env.MEMORY_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Replicas | ${{ env.MIN_REPLICAS }}-${{ env.MAX_REPLICAS }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Container URL | ${{ steps.get_url.outputs.container_url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terraform State | \`${{ env.TENANT_ID }}-terraform.tfstate\` |" >> $GITHUB_STEP_SUMMARY
