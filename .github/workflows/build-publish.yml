@@ -75,23 +75,24 @@ jobs:
           echo "Ref name: ${{ github.ref_name }}"
           echo "Ref: ${{ github.ref }}"
 
-      - name: Get Storage Account Connection String
-        id: storage
+      - name: Check Existing Tenant State
+        id: check_tenant
         run: |
-          # Get storage account connection string
-          CONNECTION_STRING=$(az storage account show-connection-string \
-            --name ${{ env.STORAGE_ACCOUNT_NAME }} \
-            --resource-group quizapp \
-            --query "connectionString" \
-            --output tsv)
+          # Check if tenant state exists in blob storage
+          az storage blob exists \
+            --connection-string "${{ secrets.STORAGE_CONNECTION_STRING }}" \
+            --container-name ${{ env.STORAGE_CONTAINER_NAME }} \
+            --name "quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate" \
+            --query "exists" \
+            --output tsv > tenant_exists.txt
           
-          echo "STORAGE_CONNECTION_STRING=$CONNECTION_STRING" >> $GITHUB_ENV
-        env:
-          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-          ARM_USE_CLI: false
+          TENANT_EXISTS=$(cat tenant_exists.txt)
+          echo "tenant_exists=$TENANT_EXISTS" >> $GITHUB_OUTPUT
+          
+          if [[ "$TENANT_EXISTS" == "true" ]]; then
+            echo "Tenant ${{ env.TENANT_ID }} already exists. Skipping deployment."
+            exit 0
+          fi
 
       - name: Extract tenant ID and load environment
         id: extract_tenant
@@ -206,32 +207,6 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.0
-
-      - name: Check Existing Tenant State
-        id: check_tenant
-        run: |
-          # Check if tenant state exists in blob storage
-          az storage blob exists \
-            --account-name ${{ env.STORAGE_ACCOUNT_NAME }} \
-            --container-name ${{ env.STORAGE_CONTAINER_NAME }} \
-            --name "quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate" \
-            --auth-mode login \
-            --query "exists" \
-            --output tsv > tenant_exists.txt
-          
-          TENANT_EXISTS=$(cat tenant_exists.txt)
-          echo "tenant_exists=$TENANT_EXISTS" >> $GITHUB_OUTPUT
-          
-          if [[ "$TENANT_EXISTS" == "true" ]]; then
-            echo "Tenant ${{ env.TENANT_ID }} already exists. Skipping deployment."
-            exit 0
-          fi
-        env:
-          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-          ARM_USE_CLI: false
 
       - name: Terraform Init
         if: steps.check_tenant.outputs.tenant_exists != 'true'
