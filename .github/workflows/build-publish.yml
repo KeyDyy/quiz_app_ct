@@ -71,51 +71,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Set Azure Environment Variables for Terraform
-        run: |
-          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
-
-      - name: Create Storage Account for Terraform State
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
-        run: |
-          # Create resource group if it doesn't exist
-          az group create \
-            --name quizapp \
-            --location "North Europe"
-
-          # Create storage account if it doesn't exist
-          az storage account create \
-            --name quizapptfstate \
-            --resource-group quizapp \
-            --location "North Europe" \
-            --sku Standard_LRS \
-            --encryption-services blob \
-            --https-only true \
-            --min-tls-version TLS1_2
-
-          # Create container if it doesn't exist
-          az storage container create \
-            --name tfstate \
-            --account-name quizapptfstate \
-            --auth-mode login
-
-      - name: Terraform Init
-        run: |
-          cd terraform
-          terraform init \
-            -backend-config="resource_group_name=quizapp" \
-            -backend-config="storage_account_name=quizapptfstate" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=${{ env.TENANT_ID }}-terraform.tfstate"
-
       - name: Debug event information
         run: |
           echo "Event name: ${{ github.event_name }}"
@@ -174,7 +129,7 @@ jobs:
                   echo "MEMORY_LIMIT=$MEMORY_LIMIT" >> $GITHUB_ENV
                   echo "MIN_REPLICAS=$MIN_REPLICAS" >> $GITHUB_ENV
                   echo "MAX_REPLICAS=$MAX_REPLICAS" >> $GITHUB_ENV
-                  echo "CREATE_NEW_ENVIRONMENT=false" >> $GITHUB_ENV
+                  echo "CREATE_NEW_ENVIRONMENT=${{ github.event.inputs.create_new_environment }}" >> $GITHUB_ENV
                 else
                   echo "Error: Failed to get tenant configuration from Azure Function"
                   exit 1
@@ -207,8 +162,7 @@ jobs:
           echo "Environment variables validated successfully"
           echo "TENANT_ID: $TENANT_ID"
           echo "SUPABASE_URL: $SUPABASE_URL"
-          echo "CPU_LIMIT: $CPU_LIMIT"
-          echo "MEMORY_LIMIT: $MEMORY_LIMIT"
+          echo "SUPABASE_KEY: [REDACTED]"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -240,15 +194,50 @@ jobs:
         with:
           terraform_version: 1.6.0
 
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Create Storage Account for Terraform State
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
+        run: |
+          # Create storage account if it doesn't exist
+          az storage account create \
+            --name quizapptfstate \
+            --resource-group quizapp \
+            --location "North Europe" \
+            --sku Standard_LRS \
+            --encryption-services blob
+
+          # Create container if it doesn't exist
+          az storage container create \
+            --name tfstate \
+            --account-name quizapptfstate \
+            --auth-mode login
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=quizapp" \
+            -backend-config="storage_account_name=quizapptfstate" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -backend-config="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}"
+
       - name: Terraform Plan
         run: |
-          cd terraform
           terraform plan \
             -var="github_repository=keydyy/quiz_app_ct" \
             -var="ghcr_username=keydyy" \
             -var="ghcr_pat=${{ secrets.GH_PAT }}" \
-            -var="create_new_environment=${{ env.CREATE_NEW_ENVIRONMENT }}" \
-            -var="image_name=${{ env.IMAGE_NAME }}" \
+            -var="create_new_environment=false" \
+            -var="image_name=quiz_app_ct" \
             -var="container_apps={ \
               \"${{ env.TENANT_ID }}\" = { \
                 name = \"quiz-app-${{ env.TENANT_ID }}\", \
@@ -261,38 +250,21 @@ jobs:
             -out=tfplan
 
       - name: Terraform Apply
-        run: |
-          cd terraform
-          terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve tfplan
 
       - name: Get Container App URL
         id: get_url
         run: |
-          cd terraform
-          CONTAINER_APP_URLS=$(terraform output -json container_app_urls)
-          CONTAINER_URL=$(echo $CONTAINER_APP_URLS | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')
-          if [[ -n "$CONTAINER_URL" && "$CONTAINER_URL" != "null" ]]; then
-            echo "container_url=https://$CONTAINER_URL" >> $GITHUB_OUTPUT
+          FQDN=$(terraform output -raw container_app_fqdn 2>/dev/null || echo "")
+          if [[ -n "$FQDN" ]]; then
+            echo "container_url=https://$FQDN" >> $GITHUB_OUTPUT
           else
             echo "container_url=Not available yet" >> $GITHUB_OUTPUT
           fi
 
-      - name: Verify Deployment
-        run: |
-          cd terraform
-          # Get storage account connection string
-          STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
-          
-          # Check if tenant state exists
-          az storage blob exists \
-            --connection-string "$STORAGE_CONNECTION_STRING" \
-            --container-name "tenant-states" \
-            --name "${{ env.TENANT_ID }}/state.json" \
-            --auth-mode key
-
       - name: Deployment Summary
         run: |
-          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment Summary " >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Tenant ID | \`${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
@@ -302,4 +274,3 @@ jobs:
           echo "| Memory Limit | ${{ env.MEMORY_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Replicas | ${{ env.MIN_REPLICAS }}-${{ env.MAX_REPLICAS }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Container URL | ${{ steps.get_url.outputs.container_url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Terraform State | \`${{ env.TENANT_ID }}-terraform.tfstate\` |" >> $GITHUB_STEP_SUMMARY
