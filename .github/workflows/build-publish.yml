@@ -45,11 +45,6 @@ on:
         required: false
         default: '3'
         type: string
-      create_new_environment:
-        description: 'Create New Environment'
-        required: false
-        default: 'false'
-        type: string
 
 env:
   IMAGE_NAME: quiz_app_ct
@@ -91,7 +86,6 @@ jobs:
             echo "MEMORY_LIMIT=${{ github.event.inputs.memory_limit }}" >> $GITHUB_ENV
             echo "MIN_REPLICAS=${{ github.event.inputs.min_replicas }}" >> $GITHUB_ENV
             echo "MAX_REPLICAS=${{ github.event.inputs.max_replicas }}" >> $GITHUB_ENV
-            echo "CREATE_NEW_ENVIRONMENT=${{ github.event.inputs.create_new_environment }}" >> $GITHUB_ENV
           else
             # For push events, get tenant ID from Azure Function
             AZURE_FUNCTION_URL="${{ secrets.AZURE_FUNCTION_URL }}"
@@ -129,7 +123,6 @@ jobs:
                   echo "MEMORY_LIMIT=$MEMORY_LIMIT" >> $GITHUB_ENV
                   echo "MIN_REPLICAS=$MIN_REPLICAS" >> $GITHUB_ENV
                   echo "MAX_REPLICAS=$MAX_REPLICAS" >> $GITHUB_ENV
-                  echo "CREATE_NEW_ENVIRONMENT=${{ github.event.inputs.create_new_environment }}" >> $GITHUB_ENV
                 else
                   echo "Error: Failed to get tenant configuration from Azure Function"
                   exit 1
@@ -172,7 +165,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GH_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -195,45 +188,12 @@ jobs:
           terraform_version: 1.6.0
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@v1
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          enable-AzPSSession: true
-
-      - name: Set Azure Environment Variables
-        run: |
-          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
-
-      - name: Create Storage Account for Terraform State
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
-        run: |
-          # Create storage account if it doesn't exist
-          az storage account create \
-            --name quizapptfstate \
-            --resource-group quizapp \
-            --location "North Europe" \
-            --sku Standard_LRS \
-            --encryption-services blob
-
-          # Create container if it doesn't exist
-          az storage container create \
-            --name tfstate \
-            --account-name quizapptfstate \
-            --auth-mode login
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Terraform Init
-        run: |
-          terraform init \
-            -backend-config="resource_group_name=quizapp" \
-            -backend-config="storage_account_name=quizapptfstate" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=${{ env.TENANT_ID }}-terraform.tfstate" \
-            -backend-config="access_key=${{ secrets.AZURE_STORAGE_ACCESS_KEY }}"
+        run: terraform init
 
       - name: Terraform Plan
         run: |
@@ -257,26 +217,10 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
-      - name: Verify Tenant State
+      - name: Update Tenant State in Blob Storage
         run: |
-          # Get storage account connection string
+          # Get storage account connection string from Terraform output
           STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
-          
-          # Check if tenant state exists
-          az storage blob exists \
-            --connection-string "$STORAGE_CONNECTION_STRING" \
-            --container-name "tenant-states" \
-            --name "${{ env.TENANT_ID }}/state.json" \
-            --auth-mode key
-
-      - name: Update Tenant State
-        if: success()
-        run: |
-          # Get storage account connection string
-          STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
-          
-          # Get container app details
-          CONTAINER_APP_ID=$(terraform output -json container_app_urls | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')
           
           # Create tenant state JSON
           TENANT_STATE=$(cat <<EOF
@@ -288,21 +232,38 @@ jobs:
             "cpu": ${{ env.CPU_LIMIT }},
             "memory": "${{ env.MEMORY_LIMIT }}",
             "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "container_app_url": "$CONTAINER_APP_ID",
             "last_updated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "status": "active"
+            "container_app_id": "$(terraform output -raw container_app_ids | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')",
+            "container_app_fqdn": "$(terraform output -raw container_app_fqdns | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')",
+            "container_app_url": "https://$(terraform output -raw container_app_fqdns | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')",
+            "status": "active",
+            "resource_group": "$(terraform output -raw resource_group_name)",
+            "environment_id": "$(terraform output -raw container_app_environment_id)",
+            "storage_container": "tenant-${{ env.TENANT_ID }}",
+            "terraform_managed": true
           }
           EOF
           )
           
-          # Upload tenant state
+          # Install Azure CLI if not present
+          if ! command -v az &> /dev/null; then
+            curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          fi
+          
+          # Login to Azure using service principal
+          az login --service-principal \
+            --username ${{ secrets.AZURE_CLIENT_ID }} \
+            --password ${{ secrets.AZURE_CLIENT_SECRET }} \
+            --tenant ${{ secrets.AZURE_TENANT_ID }}
+          
+          # Upload tenant state to blob storage
           echo "$TENANT_STATE" | az storage blob upload \
             --connection-string "$STORAGE_CONNECTION_STRING" \
             --container-name "tenant-states" \
             --name "${{ env.TENANT_ID }}/state.json" \
-            --auth-mode key \
             --content-type "application/json" \
-            --overwrite true
+            --overwrite true \
+            --file -
 
       - name: Get Container App URL
         id: get_url
@@ -320,4 +281,9 @@ jobs:
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Tenant ID | \`${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\`
+          echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Image | \`${{ env.REGISTRY }}/${{ env.GITHUB_REPOSITORY_OWNER }}/${{ env.IMAGE_NAME }}-${{ env.TENANT_ID }}:latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| CPU Limit | ${{ env.CPU_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Memory Limit | ${{ env.MEMORY_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Replicas | ${{ env.MIN_REPLICAS }}-${{ env.MAX_REPLICAS }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container URL | ${{ steps.get_url.outputs.container_url }} |" >> $GITHUB_STEP_SUMMARY
