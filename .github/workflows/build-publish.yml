@@ -275,11 +275,11 @@ jobs:
               "last_updated": $last_updated,
               "container_app_id": $container_app_id,
               "container_app_fqdn": $container_app_fqdn,
-              "container_app_url": "https://" + $container_app_fqdn,
+              "container_app_url": ("https://" + $container_app_fqdn),
               "status": "active",
               "resource_group": $resource_group,
               "environment_id": $environment_id,
-              "storage_container": "tenant-" + $tenant_id,
+              "storage_container": ("tenant-" + $tenant_id),
               "terraform_managed": true
             }')
           
