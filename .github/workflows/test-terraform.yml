@@ -1,0 +1,143 @@
+name: Test Terraform Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: 'Test Tenant ID'
+        required: true
+        type: string
+        default: 'test-tenant-1'
+      supabase_url:
+        description: 'Test Supabase URL'
+        required: true
+        type: string
+        default: 'https://test.supabase.co'
+      supabase_anon_key:
+        description: 'Test Supabase Anonymous Key'
+        required: true
+        type: string
+        default: 'test-key'
+
+env:
+  TEST_IMAGE: "ghcr.io/keydyy/quiz_app_ct:latest"  # Hardcoded test image
+  RESOURCE_GROUP: "quizapp-test"
+  LOCATION: "North Europe"
+
+jobs:
+  test_deployment:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set Azure Environment Variables for Terraform
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+
+      - name: Create Test Resource Group
+        run: |
+          az group create \
+            --name ${{ env.RESOURCE_GROUP }} \
+            --location ${{ env.LOCATION }}
+
+      - name: Create Test Storage Account
+        run: |
+          az storage account create \
+            --name "quizappteststate" \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --location ${{ env.LOCATION }} \
+            --sku Standard_LRS \
+            --encryption-services blob \
+            --https-only true \
+            --min-tls-version TLS1_2
+
+          az storage container create \
+            --name tfstate \
+            --account-name "quizappteststate" \
+            --auth-mode login
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ env.RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=quizappteststate" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=test-terraform.tfstate"
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="github_repository=keydyy/quiz_app_ct" \
+            -var="ghcr_username=keydyy" \
+            -var="ghcr_pat=${{ secrets.GH_PAT }}" \
+            -var="create_new_environment=true" \
+            -var="image_name=quiz_app_ct" \
+            -var="resource_group_name=${{ env.RESOURCE_GROUP }}" \
+            -var="location=${{ env.LOCATION }}" \
+            -var="container_apps={ \
+              \"${{ github.event.inputs.tenant_id }}\" = { \
+                name = \"test-app-${{ github.event.inputs.tenant_id }}\", \
+                supabase_url = \"${{ github.event.inputs.supabase_url }}\", \
+                supabase_anon_key = \"${{ github.event.inputs.supabase_anon_key }}\", \
+                cpu = 0.5, \
+                memory = \"1Gi\" \
+              } \
+            }" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Verify Deployment
+        run: |
+          # Get storage account connection string
+          STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
+          
+          # Verify tenant state exists
+          az storage blob exists \
+            --connection-string "$STORAGE_CONNECTION_STRING" \
+            --container-name "tenant-states" \
+            --name "${{ github.event.inputs.tenant_id }}/state.json" \
+            --auth-mode key
+
+          # Get container app URL
+          CONTAINER_URL=$(terraform output -json container_app_urls | jq -r --arg tenant "${{ github.event.inputs.tenant_id }}" '.[$tenant]')
+          echo "Container App URL: https://$CONTAINER_URL"
+
+      - name: Deployment Summary
+        run: |
+          echo "## Test Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Tenant ID | \`${{ github.event.inputs.tenant_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource Group | \`${{ env.RESOURCE_GROUP }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Name | \`test-app-${{ github.event.inputs.tenant_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Image | \`${{ env.TEST_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| CPU Limit | 0.5 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Memory Limit | 1Gi |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terraform State | \`test-terraform.tfstate\` |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup (Optional)
+        if: always()
+        run: |
+          echo "To clean up test resources, run:"
+          echo "az group delete --name ${{ env.RESOURCE_GROUP }} --yes"
+          echo "Note: This step is commented out for safety. Uncomment to enable automatic cleanup."
+          # az group delete --name ${{ env.RESOURCE_GROUP }} --yes 

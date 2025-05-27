@@ -55,10 +55,6 @@ env:
   IMAGE_NAME: quiz_app_ct
   REGISTRY: ghcr.io
   GITHUB_REPOSITORY_OWNER: keydyy
-  ARM_USE_OIDC: true
-  ARM_USE_AZUREAD: true
-  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
 
 jobs:
   build_and_deploy:
@@ -70,11 +66,55 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write  # Required for OIDC
       
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set Azure Environment Variables for Terraform
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+
+      - name: Create Storage Account for Terraform State
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
+        run: |
+          # Create resource group if it doesn't exist
+          az group create \
+            --name quizapp \
+            --location "North Europe"
+
+          # Create storage account if it doesn't exist
+          az storage account create \
+            --name quizapptfstate \
+            --resource-group quizapp \
+            --location "North Europe" \
+            --sku Standard_LRS \
+            --encryption-services blob \
+            --https-only true \
+            --min-tls-version TLS1_2
+
+          # Create container if it doesn't exist
+          az storage container create \
+            --name tfstate \
+            --account-name quizapptfstate \
+            --auth-mode login
+
+      - name: Terraform Init
+        run: |
+          cd terraform
+          terraform init \
+            -backend-config="resource_group_name=quizapp" \
+            -backend-config="storage_account_name=quizapptfstate" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=${{ env.TENANT_ID }}-terraform.tfstate"
 
       - name: Debug event information
         run: |
@@ -199,57 +239,6 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.0
-
-      - name: Azure Login with OIDC
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Set Azure Environment Variables for Terraform
-        run: |
-          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
-          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
-
-      - name: Create Storage Account for Terraform State
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
-        run: |
-          # Create resource group if it doesn't exist
-          az group create \
-            --name quizapp \
-            --location "North Europe"
-
-          # Create storage account if it doesn't exist
-          az storage account create \
-            --name quizapptfstate \
-            --resource-group quizapp \
-            --location "North Europe" \
-            --sku Standard_LRS \
-            --encryption-services blob \
-            --https-only true \
-            --min-tls-version TLS1_2
-
-          # Create container if it doesn't exist
-          az storage container create \
-            --name tfstate \
-            --account-name quizapptfstate \
-            --auth-mode login
-
-      - name: Terraform Init
-        run: |
-          cd terraform
-          terraform init \
-            -backend-config="resource_group_name=quizapp" \
-            -backend-config="storage_account_name=quizapptfstate" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=${{ env.TENANT_ID }}-terraform.tfstate" \
-            -backend-config="use_oidc=true" \
-            -backend-config="use_azuread_auth=true" \
-            -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}"
 
       - name: Terraform Plan
         run: |
