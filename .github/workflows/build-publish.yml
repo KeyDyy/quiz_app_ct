@@ -239,50 +239,76 @@ jobs:
       - name: Update Tenant State in Blob Storage
         run: |
           # Get storage account connection string from Terraform output
-          STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
+          STORAGE_CONNECTION_STRING=$(terraform output -json storage_connection_string | jq -r '.')
+          
+          # Get Terraform outputs as JSON
+          TF_OUTPUTS=$(terraform output -json)
+          
+          # Extract values from Terraform outputs
+          CONTAINER_APP_ID=$(echo "$TF_OUTPUTS" | jq -r --arg tenant "${{ env.TENANT_ID }}" '.container_app_ids.value[$tenant]')
+          CONTAINER_APP_FQDN=$(echo "$TF_OUTPUTS" | jq -r --arg tenant "${{ env.TENANT_ID }}" '.container_app_fqdns.value[$tenant]')
+          RESOURCE_GROUP=$(echo "$TF_OUTPUTS" | jq -r '.resource_group_name.value')
+          ENV_ID=$(echo "$TF_OUTPUTS" | jq -r '.container_app_environment_id.value')
           
           # Create tenant state JSON
-          TENANT_STATE=$(cat <<EOF
-          {
-            "tenant_id": "${{ env.TENANT_ID }}",
-            "name": "quiz-app-${{ env.TENANT_ID }}",
-            "supabase_url": "${{ env.SUPABASE_URL }}",
-            "supabase_anon_key": "${{ env.SUPABASE_KEY }}",
-            "cpu": ${{ env.CPU_LIMIT }},
-            "memory": "${{ env.MEMORY_LIMIT }}",
-            "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "last_updated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "container_app_id": "$(terraform output -raw container_app_ids | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')",
-            "container_app_fqdn": "$(terraform output -raw container_app_fqdns | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')",
-            "container_app_url": "https://$(terraform output -raw container_app_fqdns | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')",
-            "status": "active",
-            "resource_group": "$(terraform output -raw resource_group_name)",
-            "environment_id": "$(terraform output -raw container_app_environment_id)",
-            "storage_container": "tenant-${{ env.TENANT_ID }}",
-            "terraform_managed": true
-          }
-          EOF
-          )
+          TENANT_STATE=$(jq -n \
+            --arg tenant_id "${{ env.TENANT_ID }}" \
+            --arg name "quiz-app-${{ env.TENANT_ID }}" \
+            --arg supabase_url "${{ env.SUPABASE_URL }}" \
+            --arg supabase_key "${{ env.SUPABASE_KEY }}" \
+            --arg cpu "${{ env.CPU_LIMIT }}" \
+            --arg memory "${{ env.MEMORY_LIMIT }}" \
+            --arg created_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+            --arg last_updated "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+            --arg container_app_id "$CONTAINER_APP_ID" \
+            --arg container_app_fqdn "$CONTAINER_APP_FQDN" \
+            --arg resource_group "$RESOURCE_GROUP" \
+            --arg environment_id "$ENV_ID" \
+            '{
+              "tenant_id": $tenant_id,
+              "name": $name,
+              "supabase_url": $supabase_url,
+              "supabase_anon_key": $supabase_key,
+              "cpu": ($cpu | tonumber),
+              "memory": $memory,
+              "created_at": $created_at,
+              "last_updated": $last_updated,
+              "container_app_id": $container_app_id,
+              "container_app_fqdn": $container_app_fqdn,
+              "container_app_url": "https://" + $container_app_fqdn,
+              "status": "active",
+              "resource_group": $resource_group,
+              "environment_id": $environment_id,
+              "storage_container": "tenant-" + $tenant_id,
+              "terraform_managed": true
+            }')
           
           # Install Azure CLI if not present
           if ! command -v az &> /dev/null; then
             curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
           fi
           
-          # POPRAWKA: Użyj Service Principal credentials z secrets
+          # Login to Azure using service principal
           az login --service-principal \
             --username ${{ secrets.ARM_CLIENT_ID }} \
             --password ${{ secrets.ARM_CLIENT_SECRET }} \
             --tenant ${{ secrets.ARM_TENANT_ID }}
           
+          # Create a temporary file for the state JSON
+          TEMP_FILE=$(mktemp)
+          echo "$TENANT_STATE" > "$TEMP_FILE"
+          
           # Upload tenant state to blob storage
-          echo "$TENANT_STATE" | az storage blob upload \
+          az storage blob upload \
             --connection-string "$STORAGE_CONNECTION_STRING" \
             --container-name "tenant-states" \
             --name "${{ env.TENANT_ID }}/state.json" \
             --content-type "application/json" \
             --overwrite true \
-            --file -
+            --file "$TEMP_FILE"
+          
+          # Clean up temporary file
+          rm "$TEMP_FILE"
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
