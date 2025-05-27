@@ -219,10 +219,16 @@ jobs:
       - name: Terraform Init
         run: |
           terraform init \
+            -backend-config="resource_group_name=quizapp" \
             -backend-config="storage_account_name=quizapptfstate" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=terraform.tfstate" \
-            -backend-config="resource_group_name=quizapp"
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -backend-config="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}"
 
       - name: Terraform Plan
         run: |
@@ -245,6 +251,53 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
+
+      - name: Verify Tenant State
+        run: |
+          # Get storage account connection string
+          STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
+          
+          # Check if tenant state exists
+          az storage blob exists \
+            --connection-string "$STORAGE_CONNECTION_STRING" \
+            --container-name "tenant-states" \
+            --name "${{ env.TENANT_ID }}/state.json" \
+            --auth-mode key
+
+      - name: Update Tenant State
+        if: success()
+        run: |
+          # Get storage account connection string
+          STORAGE_CONNECTION_STRING=$(terraform output -raw storage_connection_string)
+          
+          # Get container app details
+          CONTAINER_APP_ID=$(terraform output -json container_app_urls | jq -r --arg tenant "${{ env.TENANT_ID }}" '.[$tenant]')
+          
+          # Create tenant state JSON
+          TENANT_STATE=$(cat <<EOF
+          {
+            "tenant_id": "${{ env.TENANT_ID }}",
+            "name": "quiz-app-${{ env.TENANT_ID }}",
+            "supabase_url": "${{ env.SUPABASE_URL }}",
+            "supabase_anon_key": "${{ env.SUPABASE_KEY }}",
+            "cpu": ${{ env.CPU_LIMIT }},
+            "memory": "${{ env.MEMORY_LIMIT }}",
+            "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "container_app_url": "$CONTAINER_APP_ID",
+            "last_updated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "status": "active"
+          }
+          EOF
+          )
+          
+          # Upload tenant state
+          echo "$TENANT_STATE" | az storage blob upload \
+            --connection-string "$STORAGE_CONNECTION_STRING" \
+            --container-name "tenant-states" \
+            --name "${{ env.TENANT_ID }}/state.json" \
+            --auth-mode key \
+            --content-type "application/json" \
+            --overwrite true
 
       - name: Get Container App URL
         id: get_url
