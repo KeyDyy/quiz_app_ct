@@ -228,7 +228,6 @@ jobs:
 
       - name: Terraform Init
         run: |
-          cd terraform
           terraform init \
             -backend-config="resource_group_name=quizapp" \
             -backend-config="storage_account_name=quizapptfstate" \
