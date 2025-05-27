@@ -22,7 +22,7 @@ on:
 env:
   TEST_IMAGE: "ghcr.io/keydyy/quiz_app_ct:latest"  # Hardcoded test image
   RESOURCE_GROUP: "quizapp-test"
-  LOCATION: "North Europe"
+  LOCATION: "northeurope"  # Updated to correct Azure region format
 
 jobs:
   test_deployment:
