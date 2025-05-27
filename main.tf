@@ -11,7 +11,8 @@ terraform {
     resource_group_name  = "quizapp"
     storage_account_name = "quizapptfstate"
     container_name       = "tfstate"
-    key                  = "quiz-app/terraform.tfstate"
+    # Key will be set dynamically in the workflow
+    # key                  = "quiz-app/terraform.tfstate"
   }
 }
 

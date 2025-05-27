@@ -187,60 +187,22 @@ jobs:
         with:
           terraform_version: 1.6.0
 
-      # POPRAWKA: Usuń Azure Login - będziemy używać zmiennych środowiskowych
-      # - name: Azure Login
-      #   uses: azure/login@v1
-      #   with:
-      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Terraform Init
-        run: terraform init
-        env:
-          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-          ARM_USE_CLI: false
-
-      - name: Terraform Plan
+      - name: Check Existing Tenant State
+        id: check_tenant
         run: |
-          # Get existing container apps to avoid overwriting
-          EXISTING_APPS=$(terraform output -json container_app_ids 2>/dev/null || echo "{}")
+          # Check if tenant state exists in blob storage
+          az storage blob exists \
+            --connection-string "${{ secrets.STORAGE_CONNECTION_STRING }}" \
+            --container-name "tfstate" \
+            --name "quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate" \
+            --query "exists" \
+            --output tsv > tenant_exists.txt
           
-          # Filter out existing apps from the plan
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # For manual deployment, only deploy the specified tenant
-            CONTAINER_APPS="{\"${{ env.TENANT_ID }}\" = { \
-              name = \"quiz-app-${{ env.TENANT_ID }}\", \
-              supabase_url = \"${{ env.SUPABASE_URL }}\", \
-              supabase_anon_key = \"${{ env.SUPABASE_KEY }}\", \
-              cpu = ${{ env.CPU_LIMIT }}, \
-              memory = \"${{ env.MEMORY_LIMIT }}\" \
-            }}"
-          else
-            # For push events, get all tenants but exclude existing ones
-            CONTAINER_APPS=$(echo "$EXISTING_APPS" | jq -r --arg tenant "${{ env.TENANT_ID }}" \
-              'if has($tenant) then {} else {"\($tenant)" = {
-                name = "quiz-app-\($tenant)",
-                supabase_url = env.SUPABASE_URL,
-                supabase_anon_key = env.SUPABASE_KEY,
-                cpu = (env.CPU_LIMIT | tonumber),
-                memory = env.MEMORY_LIMIT
-              }} end')
-          fi
+          TENANT_EXISTS=$(cat tenant_exists.txt)
+          echo "tenant_exists=$TENANT_EXISTS" >> $GITHUB_OUTPUT
           
-          # Only proceed with plan if there are apps to deploy
-          if [[ "$CONTAINER_APPS" != "{}" ]]; then
-            terraform plan \
-              -var="github_repository=keydyy/quiz_app_ct" \
-              -var="ghcr_username=keydyy" \
-              -var="ghcr_pat=${{ secrets.GH_PAT }}" \
-              -var="create_new_environment=false" \
-              -var="image_name=quiz_app_ct" \
-              -var="container_apps=$CONTAINER_APPS" \
-              -out=tfplan
-          else
-            echo "No new containers to deploy for tenant ${{ env.TENANT_ID }}"
+          if [[ "$TENANT_EXISTS" == "true" ]]; then
+            echo "Tenant ${{ env.TENANT_ID }} already exists. Skipping deployment."
             exit 0
           fi
         env:
@@ -249,13 +211,49 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
           ARM_USE_CLI: false
-          SUPABASE_URL: ${{ env.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ env.SUPABASE_KEY }}
-          CPU_LIMIT: ${{ env.CPU_LIMIT }}
-          MEMORY_LIMIT: ${{ env.MEMORY_LIMIT }}
+
+      - name: Terraform Init
+        if: steps.check_tenant.outputs.tenant_exists != 'true'
+        run: |
+          # Initialize Terraform with tenant-specific state file
+          terraform init \
+            -backend-config="key=quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate"
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: false
+
+      - name: Terraform Plan
+        if: steps.check_tenant.outputs.tenant_exists != 'true'
+        run: |
+          # Plan only for the specific tenant
+          terraform plan \
+            -var="github_repository=keydyy/quiz_app_ct" \
+            -var="ghcr_username=keydyy" \
+            -var="ghcr_pat=${{ secrets.GH_PAT }}" \
+            -var="create_new_environment=false" \
+            -var="image_name=quiz_app_ct" \
+            -var="container_apps={ \
+              \"${{ env.TENANT_ID }}\" = { \
+                name = \"quiz-app-${{ env.TENANT_ID }}\", \
+                supabase_url = \"${{ env.SUPABASE_URL }}\", \
+                supabase_anon_key = \"${{ env.SUPABASE_KEY }}\", \
+                cpu = ${{ env.CPU_LIMIT }}, \
+                memory = \"${{ env.MEMORY_LIMIT }}\" \
+              } \
+            }" \
+            -out=tfplan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_USE_CLI: false
 
       - name: Terraform Apply
-        if: success() && steps.plan.outcome == 'success'
+        if: steps.check_tenant.outputs.tenant_exists != 'true'
         run: terraform apply -auto-approve tfplan
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
@@ -264,46 +262,70 @@ jobs:
           ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
           ARM_USE_CLI: false
 
-      - name: Wait for Container App to be Ready
-        if: success()
+      - name: Update Tenant State in Blob Storage
+        if: steps.check_tenant.outputs.tenant_exists != 'true'
         run: |
-          # Get FQDN using JSON output
-          FQDN=$(terraform output -json container_app_fqdns | jq -r --arg tenant "${{ env.TENANT_ID }}" '.value[$tenant]')
+          # Get storage account connection string from Terraform output
+          STORAGE_CONNECTION_STRING=$(terraform output -json storage_connection_string | jq -r '.')
           
-          if [[ -z "$FQDN" || "$FQDN" == "null" ]]; then
-            echo "Error: Could not get container app FQDN"
-            exit 1
-          fi
+          # Get Terraform outputs as JSON
+          TF_OUTPUTS=$(terraform output -json)
           
-          echo "Waiting for container app to be ready at https://$FQDN"
+          # Extract values from Terraform outputs
+          CONTAINER_APP_ID=$(echo "$TF_OUTPUTS" | jq -r --arg tenant "${{ env.TENANT_ID }}" '.container_app_ids.value[$tenant]')
+          CONTAINER_APP_FQDN=$(echo "$TF_OUTPUTS" | jq -r --arg tenant "${{ env.TENANT_ID }}" '.container_app_fqdns.value[$tenant]')
+          RESOURCE_GROUP=$(echo "$TF_OUTPUTS" | jq -r '.resource_group_name.value')
+          ENV_ID=$(echo "$TF_OUTPUTS" | jq -r '.container_app_environment_id.value')
           
-          # Wait for container to be ready (max 5 minutes)
-          MAX_ATTEMPTS=30
-          ATTEMPT=1
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            if curl -s -f "https://$FQDN/api/health" > /dev/null; then
-              echo "Container app is ready!"
-              break
-            fi
-            
-            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Container app not ready yet, waiting..."
-            sleep 10
-            ATTEMPT=$((ATTEMPT + 1))
-          done
+          # Create tenant state JSON
+          TENANT_STATE=$(jq -n \
+            --arg tenant_id "${{ env.TENANT_ID }}" \
+            --arg name "quiz-app-${{ env.TENANT_ID }}" \
+            --arg supabase_url "${{ env.SUPABASE_URL }}" \
+            --arg supabase_key "${{ env.SUPABASE_KEY }}" \
+            --arg cpu "${{ env.CPU_LIMIT }}" \
+            --arg memory "${{ env.MEMORY_LIMIT }}" \
+            --arg created_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+            --arg last_updated "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+            --arg container_app_id "$CONTAINER_APP_ID" \
+            --arg container_app_fqdn "$CONTAINER_APP_FQDN" \
+            --arg resource_group "$RESOURCE_GROUP" \
+            --arg environment_id "$ENV_ID" \
+            '{
+              "tenant_id": $tenant_id,
+              "name": $name,
+              "supabase_url": $supabase_url,
+              "supabase_anon_key": $supabase_key,
+              "cpu": ($cpu | tonumber),
+              "memory": $memory,
+              "created_at": $created_at,
+              "last_updated": $last_updated,
+              "container_app_id": $container_app_id,
+              "container_app_fqdn": $container_app_fqdn,
+              "container_app_url": ("https://" + $container_app_fqdn),
+              "status": "active",
+              "resource_group": $resource_group,
+              "environment_id": $environment_id,
+              "storage_container": ("tenant-" + $tenant_id),
+              "terraform_managed": true,
+              "terraform_state": "quiz-app/tenant-" + $tenant_id + "/terraform.tfstate"
+            }')
           
-          if [ $ATTEMPT -gt $MAX_ATTEMPTS ]; then
-            echo "Error: Container app did not become ready in time"
-            echo "Checking container app logs..."
-            
-            # Get container app logs
-            az containerapp logs show \
-              --name "quiz-app-${{ env.TENANT_ID }}" \
-              --resource-group "$(terraform output -json resource_group_name | jq -r '.value')" \
-              --environment "$(terraform output -json container_app_environment_id | jq -r '.value' | cut -d'/' -f9)" \
-              --tail 100
-            
-            exit 1
-          fi
+          # Create a temporary file for the state JSON
+          TEMP_FILE=$(mktemp)
+          echo "$TENANT_STATE" > "$TEMP_FILE"
+          
+          # Upload tenant state to blob storage
+          az storage blob upload \
+            --connection-string "$STORAGE_CONNECTION_STRING" \
+            --container-name "tenant-states" \
+            --name "${{ env.TENANT_ID }}/state.json" \
+            --content-type "application/json" \
+            --overwrite true \
+            --file "$TEMP_FILE"
+          
+          # Clean up temporary file
+          rm "$TEMP_FILE"
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
@@ -313,6 +335,7 @@ jobs:
 
       - name: Get Container App URL
         id: get_url
+        if: steps.check_tenant.outputs.tenant_exists != 'true'
         run: |
           FQDN=$(terraform output -json container_app_fqdns | jq -r --arg tenant "${{ env.TENANT_ID }}" '.value[$tenant]')
           if [[ -n "$FQDN" && "$FQDN" != "null" ]]; then
@@ -332,10 +355,14 @@ jobs:
           echo "## Deployment Summary " >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Tenant ID | \`${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Docker Image | \`${{ env.REGISTRY }}/${{ env.GITHUB_REPOSITORY_OWNER }}/${{ env.IMAGE_NAME }}-${{ env.TENANT_ID }}:latest\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| CPU Limit | ${{ env.CPU_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Memory Limit | ${{ env.MEMORY_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Replicas | ${{ env.MIN_REPLICAS }}-${{ env.MAX_REPLICAS }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Container URL | ${{ steps.get_url.outputs.container_url }} |" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.check_tenant.outputs.tenant_exists }}" == "true" ]]; then
+            echo "| Status | Tenant already exists, deployment skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Tenant ID | \`${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Docker Image | \`${{ env.REGISTRY }}/${{ env.GITHUB_REPOSITORY_OWNER }}/${{ env.IMAGE_NAME }}-${{ env.TENANT_ID }}:latest\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| CPU Limit | ${{ env.CPU_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Memory Limit | ${{ env.MEMORY_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Container URL | ${{ steps.get_url.outputs.container_url }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Terraform State | \`quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate\` |" >> $GITHUB_STEP_SUMMARY
+          fi
