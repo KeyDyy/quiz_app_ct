@@ -55,6 +55,10 @@ env:
   IMAGE_NAME: quiz_app_ct
   REGISTRY: ghcr.io
   GITHUB_REPOSITORY_OWNER: keydyy
+  ARM_USE_OIDC: true
+  ARM_USE_AZUREAD: true
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
 
 jobs:
   build_and_deploy:
@@ -71,36 +75,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Create Storage Account for Terraform State
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
-        run: |
-          # Create storage account if it doesn't exist
-          az storage account create \
-            --name quizapptfstate \
-            --resource-group quizapp \
-            --location "North Europe" \
-            --sku Standard_LRS \
-            --encryption-services blob
-
-          # Create container if it doesn't exist
-          az storage container create \
-            --name tfstate \
-            --account-name quizapptfstate \
-            --auth-mode login
-
-      - name: Terraform Init
-        run: |
-          terraform init \
-            -backend-config="resource_group_name=quizapp" \
-            -backend-config="storage_account_name=quizapptfstate" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=terraform.tfstate"
 
       - name: Debug event information
         run: |
@@ -225,6 +199,49 @@ jobs:
         with:
           terraform_version: 1.6.0
 
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set Azure Environment Variables
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+          echo "ARM_USE_AZUREAD=true" >> $GITHUB_ENV
+
+      - name: Create Storage Account for Terraform State
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_new_environment == 'true' }}
+        run: |
+          # Create storage account if it doesn't exist
+          az storage account create \
+            --name quizapptfstate \
+            --resource-group quizapp \
+            --location "North Europe" \
+            --sku Standard_LRS \
+            --encryption-services blob
+
+          # Create container if it doesn't exist
+          az storage container create \
+            --name tfstate \
+            --account-name quizapptfstate \
+            --auth-mode login
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=quizapp" \
+            -backend-config="storage_account_name=quizapptfstate" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}"
+
       - name: Terraform Plan
         run: |
           terraform plan \
@@ -310,4 +327,9 @@ jobs:
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Tenant ID | \`${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\`
+          echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_STEP_SUMMARY
+          echo "| Docker Image | \`${{ env.REGISTRY }}/${{ env.GITHUB_REPOSITORY_OWNER }}/${{ env.IMAGE_NAME }}-${{ env.TENANT_ID }}:latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| CPU Limit | ${{ env.CPU_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Memory Limit | ${{ env.MEMORY_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Replicas | ${{ env.MIN_REPLICAS }}-${{ env.MAX_REPLICAS }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container URL | ${{ steps.get_url.outputs.container_url }} |" >> $GITHUB_STEP_SUMMARY
