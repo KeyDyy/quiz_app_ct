@@ -75,11 +75,28 @@ jobs:
 
       - name: Terraform Init
         run: |
+          # Create provider configuration file
+          cat > provider.tf <<EOF
+          provider "azurerm" {
+            features {}
+            use_oidc = false
+            use_cli = false
+            client_id       = "${{ secrets.AZURE_CLIENT_ID }}"
+            client_secret   = "${{ secrets.AZURE_CLIENT_SECRET }}"
+            tenant_id       = "${{ secrets.AZURE_TENANT_ID }}"
+            subscription_id = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          }
+          EOF
+
           terraform init \
             -backend-config="resource_group_name=${{ env.RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=quizappteststate" \
             -backend-config="container_name=tfstate" \
-            -backend-config="key=test-terraform.tfstate"
+            -backend-config="key=test-terraform.tfstate" \
+            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -backend-config="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
+            -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+            -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Terraform Plan
         run: |
