@@ -12,7 +12,6 @@ terraform {
     storage_account_name = "quizapptfstate"
     container_name       = "tfstate"
     key                  = "quiz-app/terraform.tfstate"
-    use_azuread_auth     = true
   }
 }
 

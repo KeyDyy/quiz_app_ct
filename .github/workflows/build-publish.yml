@@ -55,8 +55,6 @@ env:
   IMAGE_NAME: quiz_app_ct
   REGISTRY: ghcr.io
   GITHUB_REPOSITORY_OWNER: keydyy
-  ARM_USE_OIDC: true
-  ARM_USE_AZUREAD: true
 
 jobs:
   build_and_deploy:
@@ -68,7 +66,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write  # Required for OIDC
       
     steps:
       - name: Checkout repository
@@ -200,7 +197,10 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
 
       - name: Set Azure Environment Variables
         run: |
@@ -233,7 +233,6 @@ jobs:
             -backend-config="storage_account_name=quizapptfstate" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=${{ env.TENANT_ID }}-terraform.tfstate" \
-            -backend-config="use_azuread_auth=true" \
             -backend-config="access_key=${{ secrets.AZURE_STORAGE_ACCESS_KEY }}"
 
       - name: Terraform Plan
