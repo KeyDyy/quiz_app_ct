@@ -11,6 +11,7 @@ import requests
 from supabase import create_client, Client
 import psycopg2
 from urllib.parse import urlparse
+from azure.storage.blob import BlobServiceClient
 
 app = func.FunctionApp()
 
@@ -885,6 +886,159 @@ def get_tenant_config(req: func.HttpRequest) -> func.HttpResponse:
         logger.exception("Error in GetTenantConfig function")
         return func.HttpResponse(
             json.dumps({"error": f"Failed to get tenant configuration: {str(e)}"}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+
+@app.function_name(name="DeleteTenant")
+@app.route(route="delete-tenant", auth_level=func.AuthLevel.FUNCTION)
+def delete_tenant(req: func.HttpRequest) -> func.HttpResponse:
+    """Delete a tenant and its resources"""
+    try:
+        logger.info("Starting DeleteTenant function")
+
+        # Parse request
+        try:
+            data = req.get_json()
+            if not data:
+                return func.HttpResponse(
+                    json.dumps({"error": "No JSON data provided"}),
+                    status_code=400,
+                    mimetype="application/json",
+                )
+        except Exception as e:
+            return func.HttpResponse(
+                json.dumps({"error": f"Invalid JSON: {str(e)}"}),
+                status_code=400,
+                mimetype="application/json",
+            )
+
+        # Extract and validate parameters
+        tenant_id = data.get("tenant_id")
+        gh_pat = data.get("gh_pat")
+
+        if not all([tenant_id, gh_pat]):
+            missing_fields = []
+            if not tenant_id:
+                missing_fields.append("tenant_id")
+            if not gh_pat:
+                missing_fields.append("gh_pat")
+
+            return func.HttpResponse(
+                json.dumps(
+                    {"error": f"Missing required fields: {', '.join(missing_fields)}"}
+                ),
+                status_code=400,
+                mimetype="application/json",
+            )
+
+        # Verify tenant state exists
+        try:
+            # Get storage account connection string from environment
+            storage_connection_string = os.environ.get(
+                "AZURE_STORAGE_CONNECTION_STRING"
+            )
+            if not storage_connection_string:
+                raise Exception("Storage connection string not found in environment")
+
+            # Check if tenant state exists
+            blob_service_client = BlobServiceClient.from_connection_string(
+                storage_connection_string
+            )
+            container_client = blob_service_client.get_container_client("tenant-states")
+            blob_client = container_client.get_blob_client(f"{tenant_id}/state.json")
+
+            try:
+                # Try to get blob properties to check if it exists
+                blob_client.get_blob_properties()
+            except Exception as e:
+                if "BlobNotFound" in str(e):
+                    return func.HttpResponse(
+                        json.dumps({"error": f"Tenant {tenant_id} not found"}),
+                        status_code=404,
+                        mimetype="application/json",
+                    )
+                raise
+
+        except Exception as e:
+            logger.error(f"Error verifying tenant state: {str(e)}")
+            return func.HttpResponse(
+                json.dumps({"error": f"Failed to verify tenant state: {str(e)}"}),
+                status_code=500,
+                mimetype="application/json",
+            )
+
+        # Trigger GitHub Actions workflow for deletion
+        try:
+            headers = {
+                "Authorization": f"token {gh_pat}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+
+            # Get the workflow ID for "Delete Tenant"
+            workflow_url = (
+                f"{GITHUB_API_URL}/repos/keydyy/quiz_app_ct/actions/workflows"
+            )
+            response = requests.get(workflow_url, headers=headers, timeout=30)
+            if response.status_code != 200:
+                raise Exception(
+                    f"Failed to get workflows: {response.status_code} - {response.text}"
+                )
+
+            workflows = response.json()["workflows"]
+            delete_workflow = next(
+                (w for w in workflows if w["name"] == "Delete Tenant"), None
+            )
+            if not delete_workflow:
+                available_workflows = [w["name"] for w in workflows]
+                raise Exception(
+                    f"Delete Tenant workflow not found. Available workflows: {available_workflows}"
+                )
+
+            # Trigger the workflow
+            trigger_url = f"{GITHUB_API_URL}/repos/keydyy/quiz_app_ct/actions/workflows/{delete_workflow['id']}/dispatches"
+            payload = {"ref": "main", "inputs": {"tenant_id": tenant_id}}
+
+            response = requests.post(
+                trigger_url, headers=headers, json=payload, timeout=30
+            )
+            if response.status_code != 204:
+                raise Exception(
+                    f"Failed to trigger workflow: {response.status_code} - {response.text}"
+                )
+
+            return func.HttpResponse(
+                json.dumps(
+                    {
+                        "message": f"Tenant {tenant_id} deletion initiated",
+                        "tenant_id": tenant_id,
+                        "status": "deletion_in_progress",
+                        "workflow_id": delete_workflow["id"],
+                        "github_actions_url": f"https://github.com/keydyy/quiz_app_ct/actions/workflows/{delete_workflow['id']}",
+                    }
+                ),
+                status_code=200,
+                mimetype="application/json",
+            )
+
+        except Exception as e:
+            logger.error(f"Error triggering deletion workflow: {str(e)}")
+            return func.HttpResponse(
+                json.dumps({"error": f"Failed to trigger deletion: {str(e)}"}),
+                status_code=500,
+                mimetype="application/json",
+            )
+
+    except Exception as e:
+        logger.exception("Error in DeleteTenant function")
+        return func.HttpResponse(
+            json.dumps(
+                {
+                    "error": f"Failed to delete tenant: {str(e)}",
+                    "tenant_id": tenant_id if "tenant_id" in locals() else "unknown",
+                }
+            ),
             status_code=500,
             mimetype="application/json",
         )
