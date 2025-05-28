@@ -110,76 +110,10 @@ data "azurerm_storage_account" "app_storage" {
   resource_group_name = var.resource_group_name
 }
 
-# Resource Group (only if creating new environment)
-resource "azurerm_resource_group" "quiz_app" {
-  count    = var.create_new_environment ? 1 : 0
-  name     = var.resource_group_name
-  location = var.location
-
-  tags = {
-    environment = "production"
-    purpose     = "quiz-app"
-    managed_by  = "terraform"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-# Log Analytics Workspace (only if creating new environment)
-resource "azurerm_log_analytics_workspace" "quiz_app" {
-  count               = var.create_new_environment ? 1 : 0
-  name                = "quiz-app-logs"
-  location            = local.rg_location
-  resource_group_name = local.rg_name
-  sku                 = "PerGB2018"
-  retention_in_days   = 30
-
-  tags = {
-    environment = "production"
-    purpose     = "quiz-app-logging"
-    managed_by  = "terraform"
-  }
-}
-
-# Container App Environment (only if creating new environment)
-resource "azurerm_container_app_environment" "quiz_env" {
-  count                      = var.create_new_environment ? 1 : 0
-  name                       = var.environment_name
-  location                   = local.rg_location
-  resource_group_name        = local.rg_name
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.quiz_app[0].id
-
-  tags = {
-    environment = "production"
-    purpose     = "quiz-app"
-    managed_by  = "terraform"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-# Create blob containers for each tenant
+# Create one container per tenant for both data and state
 resource "azurerm_storage_container" "tenant_containers" {
   for_each              = var.container_apps
   name                  = "tenant-${each.key}"
-  storage_account_id    = data.azurerm_storage_account.app_storage.id
-  container_access_type = "private"
-}
-
-# Shared container for common files
-resource "azurerm_storage_container" "shared_container" {
-  name                  = "shared"
-  storage_account_id    = data.azurerm_storage_account.app_storage.id
-  container_access_type = "private"
-}
-
-# Container for tenant states
-resource "azurerm_storage_container" "tenant_states" {
-  name                  = "tenant-states"
   storage_account_id    = data.azurerm_storage_account.app_storage.id
   container_access_type = "private"
 }
@@ -279,11 +213,6 @@ resource "azurerm_container_app" "quiz_app" {
         value = "tenant-${each.key}"
       }
 
-      env {
-        name  = "AZURE_STORAGE_SHARED_CONTAINER"
-        value = "shared"
-      }
-
       # Health probes
       liveness_probe {
         transport = "HTTP"
@@ -334,12 +263,12 @@ resource "azurerm_container_app" "quiz_app" {
   ]
 }
 
-# Store tenant state in blob storage
+# Store tenant state in the tenant's container
 resource "azurerm_storage_blob" "tenant_state" {
   for_each               = var.container_apps
-  name                   = "${each.key}/state.json"
+  name                   = "state.json"
   storage_account_name   = data.azurerm_storage_account.app_storage.name
-  storage_container_name = azurerm_storage_container.tenant_states.name
+  storage_container_name = "tenant-${each.key}"
   type                  = "Block"
   source_content        = jsonencode({
     tenant_id           = each.key
@@ -363,7 +292,7 @@ resource "azurerm_storage_blob" "tenant_state" {
 
   depends_on = [
     azurerm_container_app.quiz_app,
-    azurerm_storage_container.tenant_states
+    azurerm_storage_container.tenant_containers
   ]
 }
 
@@ -435,8 +364,8 @@ output "tenant_states" {
       name          = v.name
       fqdn          = azurerm_container_app.quiz_app[k].ingress[0].fqdn
       url           = "https://${azurerm_container_app.quiz_app[k].ingress[0].fqdn}"
-      state_blob    = "${k}/state.json"
-      storage_path  = "${data.azurerm_storage_account.app_storage.name}/tenant-states/${k}/state.json"
+      state_blob    = "state.json"
+      storage_path  = "${data.azurerm_storage_account.app_storage.name}/tenant-${k}/state.json"
     }
   }
 }
