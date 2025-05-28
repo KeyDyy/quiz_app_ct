@@ -93,7 +93,9 @@ data "azurerm_storage_containers" "existing_containers" {
 }
 
 # Check existing container apps to prevent duplicates
-data "azurerm_container_apps" "existing_apps" {
+data "azurerm_container_app" "existing_apps" {
+  for_each            = toset(local.existing_tenant_ids)
+  name                = "quiz-app-${each.value}"
   resource_group_name = var.resource_group_name
 }
 
