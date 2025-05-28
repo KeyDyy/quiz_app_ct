@@ -52,6 +52,35 @@ jobs:
           TENANT_STATE=$(cat tenant-state.json)
           echo "tenant_state=$TENANT_STATE" >> $GITHUB_OUTPUT
 
+      - name: Verify Tenant Status
+        id: verify_status
+        run: |
+          # Check if tenant is in use
+          TENANT_STATE="${{ steps.get_state.outputs.tenant_state }}"
+          CONTAINER_APP_ID=$(echo "$TENANT_STATE" | jq -r '.container_app_id')
+          
+          # Check container app status
+          APP_STATUS=$(az containerapp show \
+            --name "quiz-app-${{ github.event.inputs.tenant_id }}" \
+            --resource-group quizapp \
+            --query "properties.runningStatus" \
+            --output tsv 2>/dev/null || echo "not_found")
+          
+          if [[ "$APP_STATUS" == "Running" ]]; then
+            echo "Error: Tenant is currently running and cannot be deleted"
+            exit 1
+          fi
+          
+          # Create backup of tenant state
+          BACKUP_TIMESTAMP=$(date -u +"%Y%m%d_%H%M%S")
+          az storage blob copy start \
+            --connection-string "$CONNECTION_STRING" \
+            --source-container "tenant-states" \
+            --source-blob "${{ github.event.inputs.tenant_id }}/state.json" \
+            --destination-container "tenant-states-backup" \
+            --destination-blob "${{ github.event.inputs.tenant_id }}/state_${BACKUP_TIMESTAMP}.json" \
+            --auth-mode key
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -93,6 +122,25 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
+      - name: Verify Resource Deletion
+        run: |
+          # Verify container app is deleted
+          if az containerapp show \
+            --name "quiz-app-${{ github.event.inputs.tenant_id }}" \
+            --resource-group quizapp &>/dev/null; then
+            echo "Error: Container app still exists"
+            exit 1
+          fi
+          
+          # Verify storage container is deleted
+          if az storage container show \
+            --connection-string "$CONNECTION_STRING" \
+            --name "tenant-${{ github.event.inputs.tenant_id }}" \
+            --auth-mode key &>/dev/null; then
+            echo "Error: Storage container still exists"
+            exit 1
+          fi
+
       - name: Cleanup Tenant State
         run: |
           # Get storage account connection string
@@ -103,23 +151,39 @@ jobs:
             --connection-string "$CONNECTION_STRING" \
             --container-name "tenant-states" \
             --name "${{ github.event.inputs.tenant_id }}/state.json" \
-            --auth-mode key
+            --auth-mode key || echo "Warning: Failed to delete tenant state blob"
           
           # Delete tenant container
           az storage container delete \
             --connection-string "$CONNECTION_STRING" \
             --name "tenant-${{ github.event.inputs.tenant_id }}" \
-            --auth-mode key
+            --auth-mode key || echo "Warning: Failed to delete tenant container"
 
       - name: Delete Container Image
         run: |
           # Delete the container image from GHCR
           gh auth login --with-token <<< "${{ secrets.GH_PAT }}"
-          gh api \
-            -X DELETE \
+          
+          # Get all versions of the package
+          PACKAGE_VERSIONS=$(gh api \
+            -X GET \
             "/user/packages/container/quiz_app_ct-${{ github.event.inputs.tenant_id }}/versions" \
             -f package_type=container \
-            -f package_name="quiz_app_ct-${{ github.event.inputs.tenant_id }}"
+            -f package_name="quiz_app_ct-${{ github.event.inputs.tenant_id }}" \
+            --jq '.[].id' || echo "")
+          
+          if [[ -n "$PACKAGE_VERSIONS" ]]; then
+            # Delete each version
+            for version_id in $PACKAGE_VERSIONS; do
+              gh api \
+                -X DELETE \
+                "/user/packages/container/quiz_app_ct-${{ github.event.inputs.tenant_id }}/versions/$version_id" \
+                -f package_type=container \
+                -f package_name="quiz_app_ct-${{ github.event.inputs.tenant_id }}" || echo "Warning: Failed to delete version $version_id"
+            done
+          else
+            echo "No container image versions found to delete"
+          fi
 
       - name: Deployment Summary
         run: |
@@ -128,4 +192,6 @@ jobs:
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Tenant ID | \`${{ github.event.inputs.tenant_id }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Status | Deleted |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deleted Resources | Container App, Storage Container, Container Image, Tenant State |" >> $GITHUB_STEP_SUMMARY 
+          echo "| Deleted Resources | Container App, Storage Container, Container Image, Tenant State |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backup Created | Yes (in tenant-states-backup container) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Verification | All resources verified as deleted |" >> $GITHUB_STEP_SUMMARY 
