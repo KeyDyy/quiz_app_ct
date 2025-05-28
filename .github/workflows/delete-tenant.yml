@@ -38,8 +38,7 @@ jobs:
         id: verify_tenant
         run: |
           echo "Verifying tenant ${{ github.event.inputs.tenant_id }} exists..."
-          
-          # Check tenant state blob
+
           if ! az storage blob exists \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
             --container-name "tenant-states" \
@@ -48,19 +47,16 @@ jobs:
             echo "Error: Tenant state not found"
             exit 1
           fi
-          
-          # Get tenant state for name
+
           az storage blob download \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
             --container-name "tenant-states" \
             --name "${{ github.event.inputs.tenant_id }}/state.json" \
             --file tenant-state.json \
             --auth-mode key
-          
-          # Extract tenant name from state
+
           TENANT_NAME=$(jq -r '.name' tenant-state.json)
           echo "tenant_name=$TENANT_NAME" >> $GITHUB_OUTPUT
-          
           echo "Tenant verification successful"
 
       - name: Set up Terraform
@@ -79,7 +75,6 @@ jobs:
 
       - name: Terraform Plan
         run: |
-          # Create a plan to delete the specific tenant
           terraform plan \
             -var="github_repository=keydyy/quiz_app_ct" \
             -var="ghcr_username=keydyy" \
@@ -87,12 +82,8 @@ jobs:
             -var="create_new_environment=false" \
             -var="image_name=quiz_app_ct" \
             -var="force_delete=${{ github.event.inputs.force_delete }}" \
-            -var="container_apps={ \
-              \"${{ github.event.inputs.tenant_id }}\" = { \
-                name = \"${{ steps.verify_tenant.outputs.tenant_name }}\", \
-                action = \"delete\" \
-              } \
-            }" \
+            -var="container_apps={ \"${{ github.event.inputs.tenant_id }}\" = { name = \"${{ steps.verify_tenant.outputs.tenant_name }}\", action = \"delete\" } }" \
+            -var="tenant_to_delete=${{ github.event.inputs.tenant_id }}" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -101,28 +92,32 @@ jobs:
       - name: Get Terraform Outputs
         id: tf_outputs
         run: |
-          # Get management summary
           MANAGEMENT_SUMMARY=$(terraform output -json management_summary)
           echo "management_summary=$MANAGEMENT_SUMMARY" >> $GITHUB_OUTPUT
-          
-          # Get deleted tenants
+
           DELETED_TENANTS=$(terraform output -json deleted_tenants)
           echo "deleted_tenants=$DELETED_TENANTS" >> $GITHUB_OUTPUT
 
       - name: Delete Container Image
         run: |
           gh auth login --with-token <<< "${{ secrets.GH_PAT }}"
-          
-          # Get all versions of the container image
+
           PACKAGE_VERSIONS=$(gh api \
             -X GET "/user/packages/container/quiz_app_ct-${{ github.event.inputs.tenant_id }}/versions" \
             --jq '.[].id' || echo "")
-          
-          # Delete each version
+
           for version_id in $PACKAGE_VERSIONS; do
             echo "Deleting container image version $version_id"
             gh api -X DELETE "/user/packages/container/quiz_app_ct-${{ github.event.inputs.tenant_id }}/versions/$version_id" || echo "Warning: Failed to delete version $version_id"
           done
+
+      - name: Delete Tenant Blob Container
+        run: |
+          echo "Deleting blob container tenant-${{ github.event.inputs.tenant_id }}..."
+          az storage container delete \
+            --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
+            --name "tenant-${{ github.event.inputs.tenant_id }}" \
+            --auth-mode key || echo "Warning: Failed to delete container tenant-${{ github.event.inputs.tenant_id }}"
 
       - name: Deployment Summary
         run: |
@@ -133,8 +128,7 @@ jobs:
           echo "| Action | Delete |" >> $GITHUB_STEP_SUMMARY
           echo "| Force Delete | ${{ github.event.inputs.force_delete }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Status | Deleted |" >> $GITHUB_STEP_SUMMARY
-          
-          # Add management summary if available
+
           if [[ -n "${{ steps.tf_outputs.outputs.management_summary }}" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Management Summary" >> $GITHUB_STEP_SUMMARY
@@ -142,8 +136,7 @@ jobs:
             echo "${{ steps.tf_outputs.outputs.management_summary }}" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           fi
-          
-          # Add deleted resources list
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Deleted Resources" >> $GITHUB_STEP_SUMMARY
           echo "- Container App: \`${{ steps.verify_tenant.outputs.tenant_name }}\`" >> $GITHUB_STEP_SUMMARY
