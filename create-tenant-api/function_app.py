@@ -931,41 +931,39 @@ def delete_tenant(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json",
             )
 
-        # Verify tenant state exists
-        try:
-            # Get storage account connection string from environment
-            storage_connection_string = os.environ.get(
-                "AZURE_STORAGE_CONNECTION_STRING"
-            )
-            if not storage_connection_string:
-                raise Exception("Storage connection string not found in environment")
+        # # Verify tenant state exists
+        # try:
+        #     # Get storage account connection string from environment
+        #     storage_connection_string = ""
+        #     if not storage_connection_string:
+        #         raise Exception("Storage connection string not found in environment")
 
-            # Check if tenant state exists
-            blob_service_client = BlobServiceClient.from_connection_string(
-                storage_connection_string
-            )
-            container_client = blob_service_client.get_container_client("tenant-states")
-            blob_client = container_client.get_blob_client(f"{tenant_id}/state.json")
+        #     # Check if tenant state exists
+        #     blob_service_client = BlobServiceClient.from_connection_string(
+        #         storage_connection_string
+        #     )
+        #     container_client = blob_service_client.get_container_client("tenant-states")
+        #     blob_client = container_client.get_blob_client(f"{tenant_id}/state.json")
 
-            try:
-                # Try to get blob properties to check if it exists
-                blob_client.get_blob_properties()
-            except Exception as e:
-                if "BlobNotFound" in str(e):
-                    return func.HttpResponse(
-                        json.dumps({"error": f"Tenant {tenant_id} not found"}),
-                        status_code=404,
-                        mimetype="application/json",
-                    )
-                raise
+        #     try:
+        #         # Try to get blob properties to check if it exists
+        #         blob_client.get_blob_properties()
+        #     except Exception as e:
+        #         if "BlobNotFound" in str(e):
+        #             return func.HttpResponse(
+        #                 json.dumps({"error": f"Tenant {tenant_id} not found"}),
+        #                 status_code=404,
+        #                 mimetype="application/json",
+        #             )
+        #         raise
 
-        except Exception as e:
-            logger.error(f"Error verifying tenant state: {str(e)}")
-            return func.HttpResponse(
-                json.dumps({"error": f"Failed to verify tenant state: {str(e)}"}),
-                status_code=500,
-                mimetype="application/json",
-            )
+        # except Exception as e:
+        #     logger.error(f"Error verifying tenant state: {str(e)}")
+        #     return func.HttpResponse(
+        #         json.dumps({"error": f"Failed to verify tenant state: {str(e)}"}),
+        #         status_code=500,
+        #         mimetype="application/json",
+        #     )
 
         # Trigger GitHub Actions workflow for deletion
         try:
