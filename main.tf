@@ -94,7 +94,7 @@ data "azurerm_storage_containers" "existing_containers" {
 
 # Check existing container apps to prevent duplicates
 data "azurerm_container_app" "existing_apps" {
-  for_each            = toset(local.existing_tenant_ids)
+  for_each            = toset(local.actual_tenant_ids)
   name                = "quiz-app-${each.value}"
   resource_group_name = var.resource_group_name
 }
@@ -212,13 +212,6 @@ data "azurerm_storage_container" "containers_to_delete" {
   for_each           = local.tenants_to_delete
   name               = "tenant-${each.key}"
   storage_account_id = data.azurerm_storage_account.app_storage.id
-}
-
-# Check existing container apps to prevent duplicates
-data "azurerm_container_app" "existing_apps" {
-  for_each            = toset(local.actual_tenant_ids)
-  name                = "quiz-app-${each.value}"
-  resource_group_name = var.resource_group_name
 }
 
 # Delete storage containers for tenants marked for deletion
