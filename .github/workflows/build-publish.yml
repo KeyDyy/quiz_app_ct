@@ -209,32 +209,10 @@ jobs:
           terraform_version: 1.6.0
 
       - name: Terraform Init
-        if: steps.check_tenant.outputs.tenant_exists != 'true'
         run: |
           # Initialize Terraform with tenant-specific state file
           terraform init \
             -backend-config="key=quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate"
-
-      - name: Import Existing Storage Account
-        if: steps.check_tenant.outputs.tenant_exists != 'true'
-        run: |
-          # Try to import storage account if it exists
-          if az storage account show \
-            --name quizappblobs \
-            --resource-group quizapp &>/dev/null; then
-            echo "Storage account exists, importing into Terraform state..."
-            terraform import \
-              -var="github_repository=keydyy/quiz_app_ct" \
-              -var="ghcr_username=keydyy" \
-              -var="ghcr_pat=${{ secrets.GH_PAT }}" \
-              -var="create_new_environment=false" \
-              -var="image_name=quiz_app_ct" \
-              -var="container_apps={}" \
-              azurerm_storage_account.app_storage \
-              "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/quizapp/providers/Microsoft.Storage/storageAccounts/quizappblobs"
-          else
-            echo "Storage account does not exist, will be created by Terraform"
-          fi
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}

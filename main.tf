@@ -104,6 +104,10 @@ data "azurerm_container_app_environment" "quiz_env" {
   resource_group_name = var.resource_group_name
 }
 
+# data "azurerm_storage_account" "app_storage" {
+#   name                = "quizappblobs"
+#   resource_group_name = "quizapp"
+# }
 # Resource Group (only if creating new environment)
 resource "azurerm_resource_group" "quiz_app" {
   count    = var.create_new_environment ? 1 : 0
