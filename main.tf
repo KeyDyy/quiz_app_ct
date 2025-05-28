@@ -329,7 +329,7 @@ resource "azurerm_container_app" "quiz_app" {
   }
 
   depends_on = [
-    azurerm_storage_account.app_storage,
+    data.azurerm_storage_account.app_storage,
     azurerm_storage_container.tenant_containers
   ]
 }
