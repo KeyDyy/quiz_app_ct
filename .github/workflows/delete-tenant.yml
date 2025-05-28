@@ -41,8 +41,8 @@ jobs:
 
           if ! az storage blob exists \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
-            --container-name "tenant-states" \
-            --name "${{ github.event.inputs.tenant_id }}/state.json" \
+            --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
+            --name "state.json" \
             --auth-mode key; then
             echo "Error: Tenant state not found"
             exit 1
@@ -50,8 +50,8 @@ jobs:
 
           az storage blob download \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
-            --container-name "tenant-states" \
-            --name "${{ github.event.inputs.tenant_id }}/state.json" \
+            --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
+            --name "state.json" \
             --file tenant-state.json \
             --auth-mode key
 
@@ -141,4 +141,4 @@ jobs:
           echo "- Container App: \`${{ steps.verify_tenant.outputs.tenant_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Storage Container: \`tenant-${{ github.event.inputs.tenant_id }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Container Image: \`quiz_app_ct-${{ github.event.inputs.tenant_id }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Tenant State: \`tenant-states/${{ github.event.inputs.tenant_id }}/state.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Tenant State: \`tenant-${{ github.event.inputs.tenant_id }}/state.json\`" >> $GITHUB_STEP_SUMMARY
