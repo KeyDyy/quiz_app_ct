@@ -104,10 +104,12 @@ data "azurerm_container_app_environment" "quiz_env" {
   resource_group_name = var.resource_group_name
 }
 
-# data "azurerm_storage_account" "app_storage" {
-#   name                = "quizappblobs"
-#   resource_group_name = "quizapp"
-# }
+# Data source for existing storage account
+data "azurerm_storage_account" "app_storage" {
+  name                = "quizappblobs"
+  resource_group_name = var.resource_group_name
+}
+
 # Resource Group (only if creating new environment)
 resource "azurerm_resource_group" "quiz_app" {
   count    = var.create_new_environment ? 1 : 0
@@ -160,60 +162,25 @@ resource "azurerm_container_app_environment" "quiz_env" {
   }
 }
 
-# Main storage account for application data
-resource "azurerm_storage_account" "app_storage" {
-  name                     = var.storage_account_name
-  resource_group_name      = local.rg_name
-  location                 = local.rg_location
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-  account_kind             = "StorageV2"
-  min_tls_version         = "TLS1_2"
-  
-  # Enable blob public access (can be disabled for more security)
-  allow_nested_items_to_be_public = true
-  
-  # Enable blob versioning and soft delete for better data protection
-  blob_properties {
-    versioning_enabled       = true
-    change_feed_enabled      = true
-    change_feed_retention_in_days = 7
-    
-    delete_retention_policy {
-      days = 7
-    }
-    
-    container_delete_retention_policy {
-      days = 7
-    }
-  }
-
-  tags = {
-    environment = "production"
-    purpose     = "application-data"
-    managed_by  = "terraform"
-  }
-}
-
 # Create blob containers for each tenant
 resource "azurerm_storage_container" "tenant_containers" {
   for_each              = var.container_apps
   name                  = "tenant-${each.key}"
-  storage_account_id    = azurerm_storage_account.app_storage.id
+  storage_account_id    = data.azurerm_storage_account.app_storage.id
   container_access_type = "private"
 }
 
 # Shared container for common files
 resource "azurerm_storage_container" "shared_container" {
   name                  = "shared"
-  storage_account_id    = azurerm_storage_account.app_storage.id
+  storage_account_id    = data.azurerm_storage_account.app_storage.id
   container_access_type = "private"
 }
 
 # Container for tenant states
 resource "azurerm_storage_container" "tenant_states" {
   name                  = "tenant-states"
-  storage_account_id    = azurerm_storage_account.app_storage.id
+  storage_account_id    = data.azurerm_storage_account.app_storage.id
   container_access_type = "private"
 }
 
@@ -245,17 +212,17 @@ resource "azurerm_container_app" "quiz_app" {
 
   secret {
     name  = "azure-storage-connection-string"
-    value = azurerm_storage_account.app_storage.primary_connection_string
+    value = data.azurerm_storage_account.app_storage.primary_connection_string
   }
 
   secret {
     name  = "azure-storage-account-name"
-    value = azurerm_storage_account.app_storage.name
+    value = data.azurerm_storage_account.app_storage.name
   }
 
   secret {
     name  = "azure-storage-account-key"
-    value = azurerm_storage_account.app_storage.primary_access_key
+    value = data.azurerm_storage_account.app_storage.primary_access_key
   }
 
   # Template configuration
@@ -371,7 +338,7 @@ resource "azurerm_container_app" "quiz_app" {
 resource "azurerm_storage_blob" "tenant_state" {
   for_each               = var.container_apps
   name                   = "${each.key}/state.json"
-  storage_account_name   = azurerm_storage_account.app_storage.name
+  storage_account_name   = data.azurerm_storage_account.app_storage.name
   storage_container_name = azurerm_storage_container.tenant_states.name
   type                  = "Block"
   source_content        = jsonencode({
@@ -427,12 +394,12 @@ output "container_app_ids" {
 
 output "storage_account_name" {
   description = "Name of the Azure Storage Account"
-  value       = azurerm_storage_account.app_storage.name
+  value       = data.azurerm_storage_account.app_storage.name
 }
 
 output "storage_account_primary_endpoint" {
   description = "Primary blob endpoint of the storage account"
-  value       = azurerm_storage_account.app_storage.primary_blob_endpoint
+  value       = data.azurerm_storage_account.app_storage.primary_blob_endpoint
 }
 
 output "tenant_containers" {
@@ -445,7 +412,7 @@ output "tenant_containers" {
 
 output "storage_connection_string" {
   description = "Storage account connection string (sensitive)"
-  value       = azurerm_storage_account.app_storage.primary_connection_string
+  value       = data.azurerm_storage_account.app_storage.primary_connection_string
   sensitive   = true
 }
 
@@ -469,7 +436,7 @@ output "tenant_states" {
       fqdn          = azurerm_container_app.quiz_app[k].ingress[0].fqdn
       url           = "https://${azurerm_container_app.quiz_app[k].ingress[0].fqdn}"
       state_blob    = "${k}/state.json"
-      storage_path  = "${azurerm_storage_account.app_storage.name}/tenant-states/${k}/state.json"
+      storage_path  = "${data.azurerm_storage_account.app_storage.name}/tenant-states/${k}/state.json"
     }
   }
 }
