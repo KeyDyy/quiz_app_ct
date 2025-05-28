@@ -96,11 +96,9 @@ jobs:
             exit 1
           fi
           
-          # Extract tenant state and store it
-          TENANT_STATE=$(cat "$TEMP_FILE")
-          echo "tenant_state<<EOF" >> $GITHUB_OUTPUT
-          echo "$TENANT_STATE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Store tenant state as a single line JSON string
+          TENANT_STATE=$(jq -c '.' "$TEMP_FILE")
+          echo "tenant_state=$TENANT_STATE" >> $GITHUB_OUTPUT
           
           # Clean up temp file
           rm "$TEMP_FILE"
