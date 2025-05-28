@@ -1,27 +1,17 @@
 terraform {
-  required_version = ">= 1.6.0"
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
       version = "~> 4.29.0"
     }
   }
-
-  backend "azurerm" {
-    resource_group_name  = "quizapp"
-    storage_account_name = "quizapptfstate"
-    container_name       = "tfstate"
-    # Key will be set dynamically in the workflow
-    # key                  = "quiz-app/terraform.tfstate"
-  }
 }
 
 provider "azurerm" {
   features {}
-  # subscription_id  = "235ed9ed-d344-429b-b677-f295a9d36fc2"
+  subscription_id = "235ed9ed-d344-429b-b677-f295a9d36fc2"
 }
 
-# Variables
 variable "github_repository" {
   description = "GitHub repository name in format owner/repo"
   type        = string
@@ -79,61 +69,47 @@ variable "storage_account_name" {
   default     = "quizappblobs"
 }
 
-variable "environment_name" {
-  description = "Name of the Container App Environment"
-  type        = string
-  default     = "quizapp"
-}
+### === Resource Group ===
 
-# Create new resource group (conditional)
-resource "azurerm_resource_group" "quiz_app" {
-  count    = var.create_new_environment ? 1 : 0
-  name     = var.resource_group_name
-  location = var.location
-
-  tags = {
-    environment = "production"
-    purpose     = "quiz-app"
-    managed_by  = "terraform"
-  }
-}
-
-# Create new container app environment (conditional)
-resource "azurerm_container_app_environment" "quiz_env" {
-  count               = var.create_new_environment ? 1 : 0
-  name                = var.environment_name
-  location            = azurerm_resource_group.quiz_app[0].location
-  resource_group_name = azurerm_resource_group.quiz_app[0].name
-
-  tags = {
-    environment = "production"
-    purpose     = "quiz-app"
-    managed_by  = "terraform"
-  }
-}
-
-# Local values for consistent resource referencing
-locals {
-  rg_name     = var.create_new_environment ? azurerm_resource_group.quiz_app[0].name : data.azurerm_resource_group.quiz_app[0].name
-  rg_location = var.create_new_environment ? azurerm_resource_group.quiz_app[0].location : data.azurerm_resource_group.quiz_app[0].location
-  env_id      = var.create_new_environment ? azurerm_container_app_environment.quiz_env[0].id : data.azurerm_container_app_environment.quiz_env[0].id
-}
-
-# Data sources for existing resources
 data "azurerm_resource_group" "quiz_app" {
   count = var.create_new_environment ? 0 : 1
   name  = var.resource_group_name
 }
 
+resource "azurerm_resource_group" "quiz_app" {
+  count    = var.create_new_environment ? 1 : 0
+  name     = var.resource_group_name
+  location = var.location
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+### === Container App Environment ===
+
 data "azurerm_container_app_environment" "quiz_env" {
   count               = var.create_new_environment ? 0 : 1
-  name                = var.environment_name
+  name                = var.resource_group_name
   resource_group_name = var.resource_group_name
 }
 
+resource "azurerm_container_app_environment" "quiz_env" {
+  count               = var.create_new_environment ? 1 : 0
+  name                = var.resource_group_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+### === Storage Account (from working version) ===
+
 # Data source for existing storage account
 data "azurerm_storage_account" "app_storage" {
-  name                = "quizappblobs"
+  name                = var.storage_account_name
   resource_group_name = var.resource_group_name
 }
 
@@ -145,22 +121,29 @@ resource "azurerm_storage_container" "tenant_containers" {
   container_access_type = "private"
 }
 
-# Container App Deployment
-resource "azurerm_container_app" "quiz_app" {
-  for_each                     = var.container_apps
-  name                         = each.value.name
-  container_app_environment_id = local.env_id
-  resource_group_name          = local.rg_name
-  revision_mode                = "Single"
+### === Local selectors ===
 
-  # Registry configuration for GHCR
+locals {
+  rg_name     = var.create_new_environment ? azurerm_resource_group.quiz_app[0].name : data.azurerm_resource_group.quiz_app[0].name
+  rg_location = var.create_new_environment ? azurerm_resource_group.quiz_app[0].location : data.azurerm_resource_group.quiz_app[0].location
+  env_id      = var.create_new_environment ? azurerm_container_app_environment.quiz_env[0].id : data.azurerm_container_app_environment.quiz_env[0].id
+}
+
+### === Container App Deployment ===
+
+resource "azurerm_container_app" "quiz_app" {
+  for_each                      = var.container_apps
+  name                          = each.value.name
+  container_app_environment_id  = local.env_id
+  resource_group_name           = local.rg_name
+  revision_mode                 = "Single"
+
   registry {
-    server               = "ghcr.io"
-    username             = var.ghcr_username
-    password_secret_name = "ghcr-pat"
+    server                = "ghcr.io"
+    username              = var.ghcr_username
+    password_secret_name  = "ghcr-pat"
   }
 
-  # Secrets configuration
   secret {
     name  = "ghcr-pat"
     value = var.ghcr_pat
@@ -171,6 +154,7 @@ resource "azurerm_container_app" "quiz_app" {
     value = each.value.supabase_anon_key
   }
 
+  # Add storage secrets back (from working version)
   secret {
     name  = "azure-storage-connection-string"
     value = data.azurerm_storage_account.app_storage.primary_connection_string
@@ -186,7 +170,6 @@ resource "azurerm_container_app" "quiz_app" {
     value = data.azurerm_storage_account.app_storage.primary_access_key
   }
 
-  # Template configuration
   template {
     min_replicas    = 1
     max_replicas    = 3
@@ -194,7 +177,7 @@ resource "azurerm_container_app" "quiz_app" {
     
     container {
       name   = "nextjs"
-      image  = "ghcr.io/${var.ghcr_username}/${var.image_name}:latest"
+      image  = "ghcr.io/${var.ghcr_username}/${var.image_name}-${each.key}:latest"
       cpu    = each.value.cpu
       memory = each.value.memory
 
@@ -210,8 +193,8 @@ resource "azurerm_container_app" "quiz_app" {
       }
 
       env {
-        name        = "NEXT_PUBLIC_SUPABASE_ANON_KEY"
-        secret_name = "supabase-anon-key-${each.key}"
+        name         = "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+        secret_name  = "supabase-anon-key-${each.key}"
       }
 
       env {
@@ -219,7 +202,7 @@ resource "azurerm_container_app" "quiz_app" {
         value = each.key
       }
 
-      # Azure Storage configuration
+      # Add storage environment variables back (from working version)
       env {
         name        = "AZURE_STORAGE_CONNECTION_STRING"
         secret_name = "azure-storage-connection-string"
@@ -240,7 +223,7 @@ resource "azurerm_container_app" "quiz_app" {
         value = "tenant-${each.key}"
       }
 
-      # Health probes
+      # Health probes (from working version)
       liveness_probe {
         transport = "HTTP"
         port      = 3000
@@ -257,7 +240,6 @@ resource "azurerm_container_app" "quiz_app" {
     }
   }
 
-  # Ingress configuration
   ingress {
     external_enabled = true
     target_port      = 3000
@@ -276,7 +258,6 @@ resource "azurerm_container_app" "quiz_app" {
     managed_by  = "terraform"
   }
 
-  # Ignore changes to image tag to allow CI/CD updates
   lifecycle {
     ignore_changes = [
       template[0].container[0].image,
@@ -290,7 +271,7 @@ resource "azurerm_container_app" "quiz_app" {
   ]
 }
 
-# Store tenant state in the tenant's container
+# Store tenant state in the tenant's container (from working version)
 resource "azurerm_storage_blob" "tenant_state" {
   for_each               = var.container_apps
   name                   = "state.json"
@@ -323,7 +304,8 @@ resource "azurerm_storage_blob" "tenant_state" {
   ]
 }
 
-# Outputs
+### === Outputs ===
+
 output "container_app_urls" {
   description = "The URLs of deployed container apps"
   value = {

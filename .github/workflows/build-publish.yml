@@ -272,7 +272,7 @@ jobs:
           RESOURCE_GROUP=$(echo "$TF_OUTPUTS" | jq -r '.resource_group_name.value')
           ENV_ID=$(echo "$TF_OUTPUTS" | jq -r '.container_app_environment_id.value')
           
-          # Create tenant state JSON
+          # Create tenant state JSON with proper jq string concatenation
           TENANT_STATE=$(jq -n \
             --arg tenant_id "${{ env.TENANT_ID }}" \
             --arg name "quiz-app-${{ env.TENANT_ID }}" \
@@ -303,7 +303,7 @@ jobs:
               "environment_id": $environment_id,
               "storage_container": ("tenant-" + $tenant_id),
               "terraform_managed": true,
-              "terraform_state": "quiz-app/tenant-" + $tenant_id + "/terraform.tfstate"
+              "terraform_state": ("quiz-app/tenant-" + $tenant_id + "/terraform.tfstate")
             }')
           
           # Create a temporary file for the state JSON
@@ -356,6 +356,7 @@ jobs:
             echo "| Tenant ID | \`${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
             echo "| Container Name | \`quiz-app-${{ env.TENANT_ID }}\` |" >> $GITHUB_STEP_SUMMARY
             echo "| Docker Image | \`${{ env.REGISTRY }}/${{ env.GITHUB_REPOSITORY_OWNER }}/${{ env.IMAGE_NAME }}-${{ env.TENANT_ID }}:latest\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| CPU Limit | ${{ env.CPU_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
             echo "| CPU Limit | ${{ env.CPU_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Memory Limit | ${{ env.MEMORY_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Container URL | ${{ steps.get_url.outputs.container_url }} |" >> $GITHUB_STEP_SUMMARY
