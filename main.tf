@@ -223,20 +223,6 @@ resource "azurerm_container_app" "quiz_app" {
         value = "tenant-${each.key}"
       }
 
-      # Health probes (from working version)
-      liveness_probe {
-        transport = "HTTP"
-        port      = 3000
-        path      = "/api/health"
-        interval_seconds = 30
-      }
-
-      readiness_probe {
-        transport = "HTTP"
-        port      = 3000
-        path      = "/api/health"
-        interval_seconds = 10
-      }
     }
   }
 
@@ -251,12 +237,12 @@ resource "azurerm_container_app" "quiz_app" {
     }
   }
 
-  tags = {
-    environment = "production"
-    tenant_id   = each.key
-    purpose     = "quiz-app"
-    managed_by  = "terraform"
-  }
+  # tags = {
+  #   environment = "production"
+  #   tenant_id   = each.key
+  #   purpose     = "quiz-app"
+  #   managed_by  = "terraform"
+  # }
 
   lifecycle {
     ignore_changes = [
