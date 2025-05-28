@@ -11,6 +11,7 @@ on:
 env:
   REGISTRY: ghcr.io
   GITHUB_REPOSITORY_OWNER: keydyy
+  AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
 
 jobs:
   delete_tenant:
@@ -31,14 +32,8 @@ jobs:
       - name: Get Tenant State
         id: get_state
         run: |
-          az storage account show-connection-string \
-            --name quizappblobs \
-            --resource-group quizapp \
-            --query connectionString \
-            --output tsv > connection_string.txt
-
-          CONNECTION_STRING=$(cat connection_string.txt)
-
+          CONNECTION_STRING="${{ env.AZURE_STORAGE_CONNECTION_STRING }}"
+          
           az storage blob download \
             --connection-string "$CONNECTION_STRING" \
             --container-name "tenant-states" \
@@ -51,7 +46,7 @@ jobs:
 
       - name: Verify Tenant Status
         run: |
-          CONNECTION_STRING=$(cat connection_string.txt)
+          CONNECTION_STRING="${{ env.AZURE_STORAGE_CONNECTION_STRING }}"
           APP_STATUS=$(az containerapp show \
             --name "quiz-app-${{ github.event.inputs.tenant_id }}" \
             --resource-group quizapp \
@@ -107,7 +102,7 @@ jobs:
             exit 1
           fi
 
-          CONNECTION_STRING=$(cat connection_string.txt)
+          CONNECTION_STRING="${{ env.AZURE_STORAGE_CONNECTION_STRING }}"
           if az storage container show \
             --connection-string "$CONNECTION_STRING" \
             --name "tenant-${{ github.event.inputs.tenant_id }}" \
@@ -118,7 +113,7 @@ jobs:
 
       - name: Cleanup Tenant State
         run: |
-          CONNECTION_STRING=$(cat connection_string.txt)
+          CONNECTION_STRING="${{ env.AZURE_STORAGE_CONNECTION_STRING }}"
           az storage blob delete \
             --connection-string "$CONNECTION_STRING" \
             --container-name "tenant-states" \
