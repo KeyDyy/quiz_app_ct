@@ -5,6 +5,9 @@ terraform {
       version = "~> 4.29.0"
     }
   }
+  backend "azurerm" {
+    use_oidc = true
+  }
 }
 
 provider "azurerm" {
@@ -29,15 +32,16 @@ variable "ghcr_pat" {
 }
 
 variable "container_apps" {
-  description = "Map of container apps (tenants) with their configuration"
+  description = "Map of container apps (tenants) with their configuration. Set to null to delete a tenant."
   type = map(object({
-    name               = string
-    supabase_url       = string
-    supabase_anon_key  = string
-    cpu                = number
-    memory             = string
+    name               = optional(string)
+    supabase_url       = optional(string)
+    supabase_anon_key  = optional(string)
+    cpu                = optional(number)
+    memory             = optional(string)
     custom_domain      = optional(string)
   }))
+  default = {}
 }
 
 variable "create_new_environment" {
@@ -105,9 +109,8 @@ resource "azurerm_container_app_environment" "quiz_env" {
   }
 }
 
-### === Storage Account (from working version) ===
+### === Storage Account ===
 
-# Data source for existing storage account
 data "azurerm_storage_account" "app_storage" {
   name                = var.storage_account_name
   resource_group_name = var.resource_group_name
@@ -115,7 +118,7 @@ data "azurerm_storage_account" "app_storage" {
 
 # Create one container per tenant for both data and state
 resource "azurerm_storage_container" "tenant_containers" {
-  for_each              = var.container_apps
+  for_each              = { for k, v in var.container_apps : k => v if v != null }
   name                  = "tenant-${each.key}"
   storage_account_id    = data.azurerm_storage_account.app_storage.id
   container_access_type = "private"
@@ -132,7 +135,7 @@ locals {
 ### === Container App Deployment ===
 
 resource "azurerm_container_app" "quiz_app" {
-  for_each                      = var.container_apps
+  for_each                      = { for k, v in var.container_apps : k => v if v != null }
   name                          = each.value.name
   container_app_environment_id  = local.env_id
   resource_group_name           = local.rg_name
@@ -154,7 +157,6 @@ resource "azurerm_container_app" "quiz_app" {
     value = each.value.supabase_anon_key
   }
 
-  # Add storage secrets back (from working version)
   secret {
     name  = "azure-storage-connection-string"
     value = data.azurerm_storage_account.app_storage.primary_connection_string
@@ -181,7 +183,6 @@ resource "azurerm_container_app" "quiz_app" {
       cpu    = each.value.cpu
       memory = each.value.memory
 
-      # Runtime environment variables
       env {
         name  = "NODE_ENV"
         value = "production"
@@ -202,7 +203,6 @@ resource "azurerm_container_app" "quiz_app" {
         value = each.key
       }
 
-      # Add storage environment variables back (from working version)
       env {
         name        = "AZURE_STORAGE_CONNECTION_STRING"
         secret_name = "azure-storage-connection-string"
@@ -222,7 +222,6 @@ resource "azurerm_container_app" "quiz_app" {
         name  = "AZURE_STORAGE_CONTAINER_NAME"
         value = "tenant-${each.key}"
       }
-
     }
   }
 
@@ -237,13 +236,6 @@ resource "azurerm_container_app" "quiz_app" {
     }
   }
 
-  # tags = {
-  #   environment = "production"
-  #   tenant_id   = each.key
-  #   purpose     = "quiz-app"
-  #   managed_by  = "terraform"
-  # }
-
   lifecycle {
     ignore_changes = [
       template[0].container[0].image,
@@ -257,9 +249,9 @@ resource "azurerm_container_app" "quiz_app" {
   ]
 }
 
-# Store tenant state in the tenant's container (from working version)
+# Store tenant state in the tenant's container
 resource "azurerm_storage_blob" "tenant_state" {
-  for_each               = var.container_apps
+  for_each               = { for k, v in var.container_apps : k => v if v != null }
   name                   = "state.json"
   storage_account_name   = data.azurerm_storage_account.app_storage.name
   storage_container_name = "tenant-${each.key}"
@@ -353,14 +345,13 @@ output "container_app_environment_id" {
 output "tenant_states" {
   description = "Tenant state information stored in blob storage"
   value = {
-    for k, v in var.container_apps :
-    k => {
+    for k, v in var.container_apps : k => {
       tenant_id     = k
       name          = v.name
       fqdn          = azurerm_container_app.quiz_app[k].ingress[0].fqdn
       url           = "https://${azurerm_container_app.quiz_app[k].ingress[0].fqdn}"
       state_blob    = "state.json"
       storage_path  = "${data.azurerm_storage_account.app_storage.name}/tenant-${k}/state.json"
-    }
+    } if v != null
   }
 }
