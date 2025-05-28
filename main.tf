@@ -171,6 +171,13 @@ locals {
     replace(container_name, "tenant-", "")
     if startswith(container_name, "tenant-")
   ]
+
+  # Filter out system containers and get actual tenant IDs
+  actual_tenant_ids = [
+    for tenant_id in local.existing_tenant_ids :
+    tenant_id
+    if tenant_id != "states" && tenant_id != "states-backup"
+  ]
 }
 
 ### === Validation Checks ===
@@ -182,7 +189,7 @@ resource "null_resource" "validate_no_duplicates" {
   # This will fail if tenant already exists and we're trying to create it
   lifecycle {
     precondition {
-      condition = !contains(local.existing_tenant_ids, each.key) || var.force_delete
+      condition = !contains(local.actual_tenant_ids, each.key) || var.force_delete
       error_message = "Tenant '${each.key}' already exists. Use action='update' to modify existing tenant or set force_delete=true to override."
     }
   }
@@ -205,6 +212,13 @@ data "azurerm_storage_container" "containers_to_delete" {
   for_each           = local.tenants_to_delete
   name               = "tenant-${each.key}"
   storage_account_id = data.azurerm_storage_account.app_storage.id
+}
+
+# Check existing container apps to prevent duplicates
+data "azurerm_container_app" "existing_apps" {
+  for_each            = toset(local.actual_tenant_ids)
+  name                = "quiz-app-${each.value}"
+  resource_group_name = var.resource_group_name
 }
 
 # Delete storage containers for tenants marked for deletion
@@ -269,6 +283,11 @@ resource "azurerm_container_app" "quiz_app" {
   secret {
     name  = "azure-storage-account-key"
     value = data.azurerm_storage_account.app_storage.primary_access_key
+  }
+
+  secret {
+    name  = "azure-storage-container-name"
+    value = "tenant-${each.key}"
   }
 
   template {
@@ -520,8 +539,8 @@ output "deleted_tenants" {
 }
 
 output "existing_tenant_ids" {
-  description = "List of existing tenant IDs found in storage"
-  value = local.existing_tenant_ids
+  description = "List of existing tenant IDs found in storage (excluding system containers)"
+  value = local.actual_tenant_ids
 }
 
 output "management_summary" {
@@ -530,6 +549,6 @@ output "management_summary" {
     created = keys(local.tenants_to_create)
     updated = keys(local.tenants_to_update)
     deleted = keys(local.tenants_to_delete)
-    existing = local.existing_tenant_ids
+    existing = local.actual_tenant_ids
   }
 }
