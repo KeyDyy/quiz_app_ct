@@ -53,3 +53,4 @@ override.tf.json
 
 
 # *.azure_credentials.json
+create-tenant-api/function_app.py
