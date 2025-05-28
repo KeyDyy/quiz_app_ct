@@ -85,6 +85,33 @@ variable "environment_name" {
   default     = "quizapp"
 }
 
+# Create new resource group (conditional)
+resource "azurerm_resource_group" "quiz_app" {
+  count    = var.create_new_environment ? 1 : 0
+  name     = var.resource_group_name
+  location = var.location
+
+  tags = {
+    environment = "production"
+    purpose     = "quiz-app"
+    managed_by  = "terraform"
+  }
+}
+
+# Create new container app environment (conditional)
+resource "azurerm_container_app_environment" "quiz_env" {
+  count               = var.create_new_environment ? 1 : 0
+  name                = var.environment_name
+  location            = azurerm_resource_group.quiz_app[0].location
+  resource_group_name = azurerm_resource_group.quiz_app[0].name
+
+  tags = {
+    environment = "production"
+    purpose     = "quiz-app"
+    managed_by  = "terraform"
+  }
+}
+
 # Local values for consistent resource referencing
 locals {
   rg_name     = var.create_new_environment ? azurerm_resource_group.quiz_app[0].name : data.azurerm_resource_group.quiz_app[0].name
