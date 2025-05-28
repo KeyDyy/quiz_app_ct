@@ -6,9 +6,7 @@ import tempfile
 import shutil
 from pathlib import Path
 import azure.functions as func
-import base64
 import requests
-from supabase import create_client, Client
 import psycopg2
 from urllib.parse import urlparse
 from azure.storage.blob import BlobServiceClient

@@ -83,7 +83,6 @@ jobs:
             -var="image_name=quiz_app_ct" \
             -var="force_delete=${{ github.event.inputs.force_delete }}" \
             -var="container_apps={ \"${{ github.event.inputs.tenant_id }}\" = { name = \"${{ steps.verify_tenant.outputs.tenant_name }}\", action = \"delete\" } }" \
-            -var="tenant_to_delete=${{ github.event.inputs.tenant_id }}" \
             -out=tfplan
 
       - name: Terraform Apply
