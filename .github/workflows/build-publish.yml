@@ -81,8 +81,8 @@ jobs:
           # Check if tenant state exists in blob storage
           az storage blob exists \
             --connection-string "${{ secrets.STORAGE_CONNECTION_STRING }}" \
-            --container-name ${{ env.STORAGE_CONTAINER_NAME }} \
-            --name "quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate" \
+            --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
+            --name "terraform.tfstate" \
             --query "exists" \
             --output tsv > tenant_exists.txt
           
@@ -90,7 +90,7 @@ jobs:
           echo "tenant_exists=$TENANT_EXISTS" >> $GITHUB_OUTPUT
           
           if [[ "$TENANT_EXISTS" == "true" ]]; then
-            echo "Tenant ${{ env.TENANT_ID }} already exists. Skipping deployment."
+            echo "Tenant ${{ github.event.inputs.tenant_id }} already exists. Skipping deployment."
             exit 0
           fi
 

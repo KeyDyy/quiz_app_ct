@@ -401,7 +401,7 @@ resource "null_resource" "delete_tenant_apps" {
 # Store tenant state in the tenant's container
 resource "azurerm_storage_blob" "tenant_state" {
   for_each               = merge(local.tenants_to_create, local.tenants_to_update)
-  name                   = "state.json"
+  name                   = "terraform.tfstate"
   storage_account_name   = data.azurerm_storage_account.app_storage.name
   storage_container_name = "tenant-${each.key}"
   type                  = "Block"
@@ -441,7 +441,7 @@ resource "null_resource" "cleanup_tenant_states" {
   provisioner "local-exec" {
     command = <<-EOT
       az storage blob delete \
-        --name "state.json" \
+        --name "terraform.tfstate" \
         --container-name "tenant-${each.key}" \
         --account-name "${data.azurerm_storage_account.app_storage.name}" \
         --account-key "${data.azurerm_storage_account.app_storage.primary_access_key}" || true
@@ -519,8 +519,8 @@ output "tenant_states" {
       name          = v.name
       fqdn          = azurerm_container_app.quiz_app[k].ingress[0].fqdn
       url           = "https://${azurerm_container_app.quiz_app[k].ingress[0].fqdn}"
-      state_blob    = "state.json"
-      storage_path  = "${data.azurerm_storage_account.app_storage.name}/tenant-${k}/state.json"
+      state_blob    = "terraform.tfstate"
+      storage_path  = "${data.azurerm_storage_account.app_storage.name}/tenant-${k}/terraform.tfstate"
       action        = v.action
     }
   }
