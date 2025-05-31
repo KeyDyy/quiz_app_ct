@@ -212,13 +212,17 @@ jobs:
         run: |
           # Initialize Terraform with tenant-specific state file
           terraform init \
-            -backend-config="key=quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate"
+            -backend-config="storage_account_name=${{ env.STORAGE_ACCOUNT_NAME }}" \
+            -backend-config="container_name=tenant-${{ github.event.inputs.tenant_id }}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="access_key=${{ secrets.STORAGE_ACCESS_KEY }}"
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
           ARM_USE_CLI: false
+          STORAGE_ACCOUNT_NAME: ${{ secrets.STORAGE_ACCOUNT_NAME }}
 
       - name: Terraform Plan
         if: steps.check_tenant.outputs.tenant_exists != 'true'

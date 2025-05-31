@@ -5,6 +5,14 @@ terraform {
       version = "~> 4.29.0"
     }
   }
+
+  backend "azurerm" {
+    # These values will be provided by the GitHub Actions workflow
+    # storage_account_name = ""
+    # container_name      = ""
+    # key                 = "terraform.tfstate"
+    # access_key          = ""
+  }
 }
 
 provider "azurerm" {
@@ -406,25 +414,47 @@ resource "azurerm_storage_blob" "tenant_state" {
   storage_container_name = "tenant-${each.key}"
   type                  = "Block"
   source_content        = jsonencode({
-    tenant_id           = each.key
-    name                = each.value.name
-    supabase_url        = each.value.supabase_url
-    supabase_anon_key   = each.value.supabase_anon_key
-    cpu                 = each.value.cpu
-    memory              = each.value.memory
-    custom_domain       = each.value.custom_domain
-    action              = each.value.action
-    created_at          = timestamp()
-    last_updated        = timestamp()
-    container_app_id    = azurerm_container_app.quiz_app[each.key].id
-    container_app_fqdn  = azurerm_container_app.quiz_app[each.key].ingress[0].fqdn
-    container_app_url   = "https://${azurerm_container_app.quiz_app[each.key].ingress[0].fqdn}"
-    status              = "active"
-    resource_group      = local.rg_name
-    environment_id      = local.env_id
-    storage_container   = "tenant-${each.key}"
-    terraform_managed   = true
-    version             = "2.0"
+    version = 4
+    terraform_version = "1.6.0"
+    serial = 1
+    lineage = ""
+    outputs = {}
+    resources = [
+      {
+        mode = "managed"
+        type = "tenant_state"
+        name = each.key
+        provider = "azurerm"
+        instances = [
+          {
+            schema_version = 0
+            attributes = {
+              tenant_id           = each.key
+              name                = each.value.name
+              supabase_url        = each.value.supabase_url
+              supabase_anon_key   = each.value.supabase_anon_key
+              cpu                 = each.value.cpu
+              memory              = each.value.memory
+              custom_domain       = each.value.custom_domain
+              action              = each.value.action
+              created_at          = timestamp()
+              last_updated        = timestamp()
+              container_app_id    = azurerm_container_app.quiz_app[each.key].id
+              container_app_fqdn  = azurerm_container_app.quiz_app[each.key].ingress[0].fqdn
+              container_app_url   = "https://${azurerm_container_app.quiz_app[each.key].ingress[0].fqdn}"
+              status              = "active"
+              resource_group      = local.rg_name
+              environment_id      = local.env_id
+              storage_container   = "tenant-${each.key}"
+              terraform_managed   = true
+              version             = "2.0"
+            }
+            private = "bnVsbA=="
+            dependencies = []
+          }
+        ]
+      }
+    ]
   })
 
   depends_on = [
