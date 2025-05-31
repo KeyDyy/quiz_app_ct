@@ -210,14 +210,21 @@ jobs:
 
       - name: Terraform Init
         run: |
-          # Force new state creation
-          terraform init -reconfigure \
-            -backend-config="storage_account_name=${{ env.STORAGE_ACCOUNT_NAME }}" \
-            -backend-config="container_name=tenant-${{ github.event.inputs.tenant_id }}" \
-            -backend-config="key=terraform.tfstate" \
-            -backend-config="access_key=${{ secrets.STORAGE_ACCESS_KEY }}" \
-            -backend-config="use_oidc=true" \
-            -backend-config="use_azuread_auth=true"
+          # Create backend configuration file
+          cat > backend.tfvars <<EOF
+          storage_account_name = "${{ env.STORAGE_ACCOUNT_NAME }}"
+          container_name       = "tenant-${{ github.event.inputs.tenant_id }}"
+          key                  = "terraform.tfstate"
+          access_key           = "${{ secrets.STORAGE_ACCESS_KEY }}"
+          EOF
+
+          # Initialize with backend config from file
+          terraform init \
+            -backend=true \
+            -backend-config=backend.tfvars \
+            -migrate-state=false \
+            -force-copy
+
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}

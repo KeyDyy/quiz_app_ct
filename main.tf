@@ -7,13 +7,10 @@ terraform {
   }
 
   backend "azurerm" {
-    # These values will be provided by the GitHub Actions workflow
-    # storage_account_name = ""
-    # container_name      = ""
-    # key                 = "terraform.tfstate"
-    # access_key          = ""
-    # use_oidc           = true
-    # use_azuread_auth   = true
+    resource_group_name  = "quizapp"
+    storage_account_name = "reqestquizstorage"
+    container_name       = "tenant-states"
+    key                  = "terraform.tfstate"
   }
 }
 
