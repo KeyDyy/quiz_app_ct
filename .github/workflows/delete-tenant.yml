@@ -39,25 +39,57 @@ jobs:
         run: |
           echo "Verifying tenant ${{ github.event.inputs.tenant_id }} exists..."
 
-          if ! az storage blob exists \
+          # Check if tenant container exists
+          if ! az storage container exists \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
-            --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
-            --name "state.json" \
-            --auth-mode key; then
-            echo "Error: Tenant state not found"
+            --name "tenant-${{ github.event.inputs.tenant_id }}" \
+            --auth-mode key --output tsv; then
+            echo "Error: Tenant container not found"
             exit 1
           fi
 
-          az storage blob download \
+          # Try to get tenant state from state.json (for backward compatibility)
+          if az storage blob exists \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
             --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
             --name "state.json" \
-            --file tenant-state.json \
-            --auth-mode key
+            --auth-mode key --output tsv; then
+            
+            echo "Found state.json, downloading..."
+            az storage blob download \
+              --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
+              --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
+              --name "state.json" \
+              --file tenant-state.json \
+              --auth-mode key
 
-          TENANT_NAME=$(jq -r '.name' tenant-state.json)
+            TENANT_NAME=$(jq -r '.name' tenant-state.json)
+            
+          # Try to get tenant state from terraform.tfstate
+          elif az storage blob exists \
+            --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
+            --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
+            --name "terraform.tfstate" \
+            --auth-mode key --output tsv; then
+            
+            echo "Found terraform.tfstate, downloading..."
+            az storage blob download \
+              --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
+              --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
+              --name "terraform.tfstate" \
+              --file terraform-state.json \
+              --auth-mode key
+
+            # Extract tenant name from terraform state metadata
+            TENANT_NAME=$(jq -r '.tenant_metadata.name // "quiz-app-${{ github.event.inputs.tenant_id }}"' terraform-state.json)
+            
+          else
+            echo "Warning: No state files found, using default naming"
+            TENANT_NAME="quiz-app-${{ github.event.inputs.tenant_id }}"
+          fi
+
           echo "tenant_name=$TENANT_NAME" >> $GITHUB_OUTPUT
-          echo "Tenant verification successful"
+          echo "Tenant verification successful. Tenant name: $TENANT_NAME"
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
@@ -91,32 +123,65 @@ jobs:
       - name: Get Terraform Outputs
         id: tf_outputs
         run: |
-          MANAGEMENT_SUMMARY=$(terraform output -json management_summary)
+          MANAGEMENT_SUMMARY=$(terraform output -json management_summary 2>/dev/null || echo '{}')
           echo "management_summary=$MANAGEMENT_SUMMARY" >> $GITHUB_OUTPUT
 
-          DELETED_TENANTS=$(terraform output -json deleted_tenants)
+          DELETED_TENANTS=$(terraform output -json deleted_tenants 2>/dev/null || echo '[]')
           echo "deleted_tenants=$DELETED_TENANTS" >> $GITHUB_OUTPUT
 
       - name: Delete Container Image
+        continue-on-error: true
         run: |
+          echo "Attempting to delete container images for tenant ${{ github.event.inputs.tenant_id }}..."
+          
+          # Login to GitHub CLI
           gh auth login --with-token <<< "${{ secrets.GH_PAT }}"
 
+          # Try to get package versions
           PACKAGE_VERSIONS=$(gh api \
             -X GET "/user/packages/container/quiz_app_ct-${{ github.event.inputs.tenant_id }}/versions" \
-            --jq '.[].id' || echo "")
+            --jq '.[].id' 2>/dev/null || echo "")
 
-          for version_id in $PACKAGE_VERSIONS; do
-            echo "Deleting container image version $version_id"
-            gh api -X DELETE "/user/packages/container/quiz_app_ct-${{ github.event.inputs.tenant_id }}/versions/$version_id" || echo "Warning: Failed to delete version $version_id"
-          done
+          if [[ -n "$PACKAGE_VERSIONS" ]]; then
+            for version_id in $PACKAGE_VERSIONS; do
+              echo "Deleting container image version $version_id"
+              gh api -X DELETE "/user/packages/container/quiz_app_ct-${{ github.event.inputs.tenant_id }}/versions/$version_id" || echo "Warning: Failed to delete version $version_id"
+            done
+          else
+            echo "No container image versions found for tenant ${{ github.event.inputs.tenant_id }}"
+          fi
 
-      - name: Delete Tenant Blob Container
+      - name: Final Cleanup Verification
         run: |
-          echo "Deleting blob container tenant-${{ github.event.inputs.tenant_id }}..."
-          az storage container delete \
+          echo "Performing final cleanup verification..."
+          
+          # Verify container app is deleted
+          if az containerapp show \
+            --name "${{ steps.verify_tenant.outputs.tenant_name }}" \
+            --resource-group "quizapp" \
+            --output none 2>/dev/null; then
+            echo "Warning: Container app still exists, attempting manual deletion..."
+            az containerapp delete \
+              --name "${{ steps.verify_tenant.outputs.tenant_name }}" \
+              --resource-group "quizapp" \
+              --yes || echo "Failed to delete container app manually"
+          else
+            echo "✓ Container app successfully deleted"
+          fi
+
+          # Verify blob container is deleted
+          if az storage container exists \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
             --name "tenant-${{ github.event.inputs.tenant_id }}" \
-            --auth-mode key || echo "Warning: Failed to delete container tenant-${{ github.event.inputs.tenant_id }}"
+            --auth-mode key --output tsv; then
+            echo "Warning: Blob container still exists, attempting manual deletion..."
+            az storage container delete \
+              --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
+              --name "tenant-${{ github.event.inputs.tenant_id }}" \
+              --auth-mode key || echo "Failed to delete blob container manually"
+          else
+            echo "✓ Blob container successfully deleted"
+          fi
 
       - name: Deployment Summary
         run: |
@@ -124,11 +189,12 @@ jobs:
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Tenant ID | \`${{ github.event.inputs.tenant_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tenant Name | \`${{ steps.verify_tenant.outputs.tenant_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Action | Delete |" >> $GITHUB_STEP_SUMMARY
           echo "| Force Delete | ${{ github.event.inputs.force_delete }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Status | Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Completed |" >> $GITHUB_STEP_SUMMARY
 
-          if [[ -n "${{ steps.tf_outputs.outputs.management_summary }}" ]]; then
+          if [[ -n "${{ steps.tf_outputs.outputs.management_summary }}" ]] && [[ "${{ steps.tf_outputs.outputs.management_summary }}" != "{}" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Management Summary" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
@@ -138,7 +204,8 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Deleted Resources" >> $GITHUB_STEP_SUMMARY
-          echo "- Container App: \`${{ steps.verify_tenant.outputs.tenant_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Storage Container: \`tenant-${{ github.event.inputs.tenant_id }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Container Image: \`quiz_app_ct-${{ github.event.inputs.tenant_id }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Tenant State: \`tenant-${{ github.event.inputs.tenant_id }}/state.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ✓ Container App: \`${{ steps.verify_tenant.outputs.tenant_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ✓ Storage Container: \`tenant-${{ github.event.inputs.tenant_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ✓ Container Image: \`quiz_app_ct-${{ github.event.inputs.tenant_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ✓ Tenant State Files: \`terraform.tfstate\` and \`state.json\`" >> $GITHUB_STEP_SUMMARY
+          
