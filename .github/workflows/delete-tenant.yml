@@ -42,7 +42,7 @@ jobs:
           if ! az storage blob exists \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
             --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
-            --name "state.json" \
+            --name "terraform.tfstate" \
             --auth-mode key; then
             echo "Error: Tenant state not found"
             exit 1
@@ -51,11 +51,11 @@ jobs:
           az storage blob download \
             --connection-string "${{ env.AZURE_STORAGE_CONNECTION_STRING }}" \
             --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
-            --name "state.json" \
-            --file tenant-state.json \
+            --name "terraform.tfstate" \
+            --file terraform.tfstate \
             --auth-mode key
 
-          TENANT_NAME=$(jq -r '.name' tenant-state.json)
+          TENANT_NAME=$(jq -r '.name' terraform.tfstate)
           echo "tenant_name=$TENANT_NAME" >> $GITHUB_OUTPUT
           echo "Tenant verification successful"
 
