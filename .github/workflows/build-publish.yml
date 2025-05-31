@@ -210,15 +210,28 @@ jobs:
 
       - name: Terraform Init
         run: |
-          # Initialize Terraform with tenant-specific state file
+          # Create backend configuration file
+          cat > backend.tfvars <<EOF
+          storage_account_name = "${{ env.STORAGE_ACCOUNT_NAME }}"
+          container_name       = "tenant-${{ github.event.inputs.tenant_id }}"
+          key                  = "terraform.tfstate"
+          access_key           = "${{ secrets.STORAGE_ACCESS_KEY }}"
+          EOF
+
+          # Initialize with backend config from file
           terraform init \
-            -backend-config="key=quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate"
+            -backend=true \
+            -backend-config=backend.tfvars \
+            -migrate-state=false \
+            -force-copy
+
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
           ARM_USE_CLI: false
+          STORAGE_ACCOUNT_NAME: ${{ secrets.STORAGE_ACCOUNT_NAME }}
 
       - name: Terraform Plan
         if: steps.check_tenant.outputs.tenant_exists != 'true'

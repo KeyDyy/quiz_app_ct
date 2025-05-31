@@ -5,6 +5,13 @@ terraform {
       version = "~> 4.29.0"
     }
   }
+
+  backend "azurerm" {
+    resource_group_name  = "quizapp"
+    storage_account_name = "reqestquizstorage"
+    container_name       = "tenant-states"
+    key                  = "terraform.tfstate"
+  }
 }
 
 provider "azurerm" {
