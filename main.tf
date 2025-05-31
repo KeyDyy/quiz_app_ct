@@ -5,7 +5,6 @@ terraform {
       version = "~> 4.29.0"
     }
   }
-
 }
 
 provider "azurerm" {
@@ -93,6 +92,13 @@ data "azurerm_storage_containers" "existing_containers" {
   storage_account_id = data.azurerm_storage_account.app_storage.id
 }
 
+# Check existing container apps to prevent duplicates
+data "azurerm_container_app" "existing_apps" {
+  for_each            = toset(local.actual_tenant_ids)
+  name                = "quiz-app-${each.value}"
+  resource_group_name = var.resource_group_name
+}
+
 ### === Resource Group ===
 
 data "azurerm_resource_group" "quiz_app" {
@@ -170,7 +176,7 @@ locals {
   actual_tenant_ids = [
     for tenant_id in local.existing_tenant_ids :
     tenant_id
-    if tenant_id != "states" && tenant_id != "states-backup" && tenant_id != "tfstate"
+    if tenant_id != "states" && tenant_id != "states-backup"
   ]
 }
 
@@ -201,14 +207,34 @@ resource "azurerm_storage_container" "tenant_containers" {
   depends_on = [null_resource.validate_no_duplicates]
 }
 
-# Data source for containers to be deleted - check if they exist first
+# Data source for containers to be deleted
 data "azurerm_storage_container" "containers_to_delete" {
-  for_each           = {
-    for k, v in local.tenants_to_delete : k => v
-    if contains(local.actual_tenant_ids, k)
-  }
+  for_each           = local.tenants_to_delete
   name               = "tenant-${each.key}"
   storage_account_id = data.azurerm_storage_account.app_storage.id
+}
+
+# Delete storage containers for tenants marked for deletion
+resource "null_resource" "delete_tenant_containers" {
+  for_each = local.tenants_to_delete
+
+  # Use Azure CLI to delete the container and all its contents
+  provisioner "local-exec" {
+    command = <<-EOT
+      az storage container delete \
+        --name "tenant-${each.key}" \
+        --account-name "${data.azurerm_storage_account.app_storage.name}" \
+        --account-key "${data.azurerm_storage_account.app_storage.primary_access_key}" \
+        --delete-snapshots include || true
+    EOT
+  }
+
+  # Ensure this runs before creating new resources
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  depends_on = [data.azurerm_storage_container.containers_to_delete]
 }
 
 ### === Container App Deployment ===
@@ -341,54 +367,39 @@ resource "azurerm_container_app" "quiz_app" {
   ]
 }
 
-### === Tenant State Management ===
-
-# Store tenant state in the tenant's container as terraform.tfstate
-resource "azurerm_storage_blob" "tenant_state" {
-  for_each               = merge(local.tenants_to_create, local.tenants_to_update)
-  name                   = "terraform.tfstate"
-  storage_account_name   = data.azurerm_storage_account.app_storage.name
-  storage_container_name = "tenant-${each.key}"
-  type                  = "Block"
-  source_content        = jsonencode({
-    version           = 4
-    terraform_version = "1.6.0"
-    serial           = 1
-    lineage          = uuidv4()
-    outputs          = {}
-    resources        = []
-    # Custom tenant metadata
-    tenant_metadata = {
-      tenant_id           = each.key
-      name                = each.value.name
-      supabase_url        = each.value.supabase_url
-      supabase_anon_key   = each.value.supabase_anon_key
-      cpu                 = each.value.cpu
-      memory              = each.value.memory
-      custom_domain       = each.value.custom_domain
-      action              = each.value.action
-      created_at          = timestamp()
-      last_updated        = timestamp()
-      container_app_id    = azurerm_container_app.quiz_app[each.key].id
-      container_app_fqdn  = azurerm_container_app.quiz_app[each.key].ingress[0].fqdn
-      container_app_url   = "https://${azurerm_container_app.quiz_app[each.key].ingress[0].fqdn}"
-      status              = "active"
-      resource_group      = local.rg_name
-      environment_id      = local.env_id
-      storage_container   = "tenant-${each.key}"
-      terraform_managed   = true
-      management_version  = "2.0"
-    }
-  })
-
-  depends_on = [
-    azurerm_container_app.quiz_app,
-    azurerm_storage_container.tenant_containers
-  ]
+# Data source for container apps to be deleted
+data "azurerm_container_app" "apps_to_delete" {
+  for_each            = local.tenants_to_delete
+  name                = each.value.name
+  resource_group_name = local.rg_name
 }
 
-# Also create a simplified state.json for backward compatibility and easier reading
-resource "azurerm_storage_blob" "tenant_state_json" {
+# Delete container apps for tenants marked for deletion
+resource "null_resource" "delete_tenant_apps" {
+  for_each = local.tenants_to_delete
+
+  # Use Azure CLI to delete the container app
+  provisioner "local-exec" {
+    command = <<-EOT
+      az containerapp delete \
+        --name "${each.value.name}" \
+        --resource-group "${local.rg_name}" \
+        --yes || true
+    EOT
+  }
+
+  # Run deletion before any new resources
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  depends_on = [data.azurerm_container_app.apps_to_delete]
+}
+
+### === Tenant State Management ===
+
+# Store tenant state in the tenant's container
+resource "azurerm_storage_blob" "tenant_state" {
   for_each               = merge(local.tenants_to_create, local.tenants_to_update)
   name                   = "state.json"
   storage_account_name   = data.azurerm_storage_account.app_storage.name
@@ -422,48 +433,19 @@ resource "azurerm_storage_blob" "tenant_state_json" {
   ]
 }
 
-### === Resource Deletion ===
-
-# Delete container apps for tenants marked for deletion
-resource "null_resource" "delete_tenant_apps" {
+# Clean up state blobs for deleted tenants
+resource "null_resource" "cleanup_tenant_states" {
   for_each = local.tenants_to_delete
 
-  # Use Azure CLI to delete the container app
+  # Delete the state blob
   provisioner "local-exec" {
     command = <<-EOT
-      echo "Deleting container app ${each.value.name}..."
-      az containerapp delete \
-        --name "${each.value.name}" \
-        --resource-group "${local.rg_name}" \
-        --yes || echo "Warning: Container app ${each.value.name} may not exist or already deleted"
-    EOT
-  }
-
-  # Run deletion before any new resources
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-# Delete storage containers and all their contents for tenants marked for deletion
-resource "null_resource" "delete_tenant_containers" {
-  for_each = local.tenants_to_delete
-
-  # Use Azure CLI to delete the container and all its contents
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "Deleting storage container tenant-${each.key}..."
-      az storage container delete \
-        --name "tenant-${each.key}" \
+      az storage blob delete \
+        --name "state.json" \
+        --container-name "tenant-${each.key}" \
         --account-name "${data.azurerm_storage_account.app_storage.name}" \
-        --account-key "${data.azurerm_storage_account.app_storage.primary_access_key}" \
-        --delete-snapshots include || echo "Warning: Container tenant-${each.key} may not exist or already deleted"
+        --account-key "${data.azurerm_storage_account.app_storage.primary_access_key}" || true
     EOT
-  }
-
-  # Ensure this runs after app deletion
-  lifecycle {
-    create_before_destroy = true
   }
 
   depends_on = [null_resource.delete_tenant_apps]
@@ -533,14 +515,13 @@ output "tenant_states" {
   description = "Tenant state information stored in blob storage"
   value = {
     for k, v in merge(local.tenants_to_create, local.tenants_to_update) : k => {
-      tenant_id        = k
-      name             = v.name
-      fqdn             = azurerm_container_app.quiz_app[k].ingress[0].fqdn
-      url              = "https://${azurerm_container_app.quiz_app[k].ingress[0].fqdn}"
-      terraform_state  = "terraform.tfstate"
-      state_json       = "state.json"
-      storage_path     = "${data.azurerm_storage_account.app_storage.name}/tenant-${k}/"
-      action           = v.action
+      tenant_id     = k
+      name          = v.name
+      fqdn          = azurerm_container_app.quiz_app[k].ingress[0].fqdn
+      url           = "https://${azurerm_container_app.quiz_app[k].ingress[0].fqdn}"
+      state_blob    = "state.json"
+      storage_path  = "${data.azurerm_storage_account.app_storage.name}/tenant-${k}/state.json"
+      action        = v.action
     }
   }
 }

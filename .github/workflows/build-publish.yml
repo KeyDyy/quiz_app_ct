@@ -81,8 +81,8 @@ jobs:
           # Check if tenant state exists in blob storage
           az storage blob exists \
             --connection-string "${{ secrets.STORAGE_CONNECTION_STRING }}" \
-            --container-name "tenant-${{ github.event.inputs.tenant_id }}" \
-            --name "terraform.tfstate" \
+            --container-name ${{ env.STORAGE_CONTAINER_NAME }} \
+            --name "quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate" \
             --query "exists" \
             --output tsv > tenant_exists.txt
           
@@ -90,7 +90,7 @@ jobs:
           echo "tenant_exists=$TENANT_EXISTS" >> $GITHUB_OUTPUT
           
           if [[ "$TENANT_EXISTS" == "true" ]]; then
-            echo "Tenant ${{ github.event.inputs.tenant_id }} already exists. Skipping deployment."
+            echo "Tenant ${{ env.TENANT_ID }} already exists. Skipping deployment."
             exit 0
           fi
 
@@ -210,28 +210,15 @@ jobs:
 
       - name: Terraform Init
         run: |
-          # Create backend configuration file
-          cat > backend.tfvars <<EOF
-          storage_account_name = "${{ env.STORAGE_ACCOUNT_NAME }}"
-          container_name       = "tenant-${{ github.event.inputs.tenant_id }}"
-          key                  = "terraform.tfstate"
-          access_key           = "${{ secrets.STORAGE_ACCESS_KEY }}"
-          EOF
-
-          # Initialize with backend config from file
+          # Initialize Terraform with tenant-specific state file
           terraform init \
-            -backend=true \
-            -backend-config=backend.tfvars \
-            -migrate-state=false \
-            -force-copy
-
+            -backend-config="key=quiz-app/tenant-${{ env.TENANT_ID }}/terraform.tfstate"
         env:
           ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
           ARM_USE_CLI: false
-          STORAGE_ACCOUNT_NAME: ${{ secrets.STORAGE_ACCOUNT_NAME }}
 
       - name: Terraform Plan
         if: steps.check_tenant.outputs.tenant_exists != 'true'
